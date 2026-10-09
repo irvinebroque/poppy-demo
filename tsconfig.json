@@ -1,0 +1,10 @@
+{
+  "compilerOptions": {
+    "target": "ES2022", "module": "ESNext", "moduleResolution": "Bundler",
+    "lib": ["ES2022"], "types": ["@cloudflare/workers-types"],
+    "strict": true, "noEmit": true, "skipLibCheck": true,
+    "allowImportingTsExtensions": true
+  },
+  "include": ["shared/**/*.ts", "workers/**/*.ts"],
+  "exclude": ["workers/caller/client", "workers/caller/vite.config.ts"]
+}

@@ -1,0 +1,8 @@
+{
+  "name": "@poppy-demo/caller",
+  "private": true,
+  "type": "module",
+  "devDependencies": {
+    "wrangler": "^4.149.0"
+  }
+}
