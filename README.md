@@ -13,7 +13,7 @@ A two-Worker demo of the [Personal Agent Protocol draft 0.4](https://personalage
 4. Ask Pi to continue. Review the exchange and choose **Confirm demo exchange**. This simulates an exchange with a $70 difference; no purchase, charge, or shipment occurs.
 5. Ask Pi to revoke access whenever you want. **New session** starts a fresh chat while retaining your approved account connection.
 
-The caller UI is adapted directly from Cloudflare's [vanilla Pi harness example](https://github.com/cloudflare/agents/tree/main/examples/next/harnesses/pi), using its Kumo components, composer, message rendering, and Pi event reducer. Tool details are collapsed and the optional tools sidebar starts closed. This app transports Pi snapshots through cookie-scoped HTTP endpoints rather than exposing the example's generic agent route. The upstream MIT license is in `licenses/cloudflare-agents.txt`.
+The caller UI is adapted directly from Cloudflare's [vanilla Pi harness example](https://github.com/cloudflare/agents/tree/main/examples/next/harnesses/pi), using its Kumo components, composer, message rendering, and Pi event reducer. Tool details are collapsed and the optional tools sidebar starts closed. This app projects Pi snapshots into a validated display view through cookie-scoped HTTP endpoints rather than exposing the example's generic agent route. The upstream MIT license is in `licenses/cloudflare-agents.txt`.
 
 Northstar is a regular catalog with two product pages and a simple account consent form. Discovery, OAuth metadata, and OpenAPI remain available at their standard endpoints; they are not part of the shopping interface.
 
@@ -49,32 +49,39 @@ The receiver's company replies are deterministic fixtures. It has no staffed hum
 
 This demo implements its OAuth, Session, and conversation layers directly using `jose` and Durable Objects.
 
-## Develop with the cf CLI
+## Develop
 
-Requires Node.js 22+ and a Cloudflare account with Workers AI access.
-
-```sh
-npm ci
-npx cf auth login
-npm run dev
-```
-
-Caller: http://localhost:8787 · Receiver: http://localhost:8788. Local development uses the real remote Workers AI binding; inference can incur usage. For protocol-only testing, run `npm test`; it uses isolated local workerd instances and needs no Cloudflare login. The replay regression waits 67 seconds to check cache expiry with real workerd time. Local HTTP is explicitly restricted to localhost/127.0.0.1 and is disabled on deployment.
+Use the pinned Node.js 24.22.0 and npm 11.20.0. Install [Vite+](https://viteplus.dev/guide) once, then use the project's pinned Vite+ 1.5.0 toolchain:
 
 ```sh
-npm run types
-npm run check
-npm test
-npm run build
-npm run smoke:live # verify the deployed synthetic account flow
+vp install --frozen-lockfile
+vp exec cf auth login
+vp run dev
 ```
 
-`npm run build` first creates the UI assets, then performs `cf deploy --dry-run` for both Workers. `npm run deploy` also creates the assets before uploading. Configuration lives in each Worker's `cloudflare.config.ts`; `wrangler.config.ts` supplies local development ports and the caller’s Vite asset build. The small helper handles cf beta's workspace dev-server discovery and keeps its local registry in this project. Binding types are inferred from the canonical configs, with typed Durable Object RPC namespaces.
+Caller: http://localhost:8787 · Receiver: http://localhost:8788. `vp run dev` starts both Workers through the Cloudflare `cf` CLI and builds the UI with Vite+. Local development uses the real remote Workers AI binding; inference can incur usage. The protocol tests use isolated local workerd instances and need no Cloudflare login. The replay regression waits 67 seconds with real workerd time.
+
+```sh
+vp run types
+vp check --deny-warnings
+vp test
+vp build          # browser assets
+vp run build     # assets and cf deploy --dry-run for both Workers
+vp run smoke:live # verify the deployed synthetic account flow
+```
+
+`npm ci` and the matching `npm run` scripts also work. Use `vp run dev` for the full demo; the built-in `vp dev` serves the browser UI alone.
+
+All build, test, lint, format, and staged-check settings live in the root `vite.config.ts`. Vite+ supplies Vite/Rolldown, Vitest, tsdown, Oxlint, Oxfmt, and TypeScript Go checks. TypeScript strict mode, type-aware linting, React StrictMode, and failure on lint warnings are enabled. `vp check --fix` applies lint fixes and formatting; the installed `.vite-hooks/pre-commit` runs the same strict checks on staged files. CI installs the pinned toolchain with `setup-vp` and runs checks, all tests, both Worker dry runs, and an npm audit.
+
+The complete generic [anti-slop](https://github.com/dmmulroy/anti-slop) ruleset is vendored in `tools/oxlint/anti-slop/` and enforced as errors, alongside `oxc/no-accumulating-spread`. Its source revision, local Vite+ API import adaptation, and licenses are recorded in `tools/oxlint/anti-slop/UPSTREAM.md`. Vendored code and generated output are excluded from linting and formatting. No direct Effect dependency is present, so the opt-in Effect rules are not enabled.
+
+Network JSON, browser commands, OAuth responses, JWT claims, and display snapshots are decoded at their boundaries with Zod. Local HTTP is restricted to localhost/127.0.0.1 and disabled on deployment. Worker configuration lives in each `cloudflare.config.ts`; `wrangler.config.ts` supplies local ports and the caller's Vite+ asset build. The helper handles cf beta's workspace dev-server discovery and keeps its local registry in this project. Binding types are inferred from the canonical configs, with typed Durable Object RPC namespaces.
 
 ## Deploy
 
 ```sh
-POPPY_WORKERS_SUBDOMAIN=your-account.workers.dev npm run deploy
+POPPY_WORKERS_SUBDOMAIN=your-account.workers.dev vp run deploy
 ```
 
 The deploy script sets HTTPS origins, disables local HTTP, bootstraps the receiver for the circular service bindings, deploys the caller, then connects the receiver to it. It uses the cf CLI and your existing cf auth profile throughout. Defaults are `poppy-caller` and `poppy-receiver`; set `POPPY_CALLER_NAME` and `POPPY_RECEIVER_NAME` to change them. `POPPY_MODEL` overrides the default `@cf/moonshotai/kimi-k2.7-code` model.
@@ -91,4 +98,4 @@ The demo's consent page represents a synthetic account, not a real customer logi
 - `shared/protocol.ts`: JWT, DPoP, validation and bounded body helpers.
 - `tests/protocol.test.mjs`: receiver protocol and security regression tests in workerd.
 - `tests/caller-flow.test.mjs`: both real Workers, Durable Objects, and service bindings through the complete synthetic account flow.
-- `tests/smoke.mjs`: shared assertions used locally and by `npm run smoke:live`; override `POPPY_CALLER_ORIGIN` / `POPPY_RECEIVER_ORIGIN` to test an isolated deployment.
+- `tests/smoke.mjs`: shared assertions used locally and by `vp run smoke:live`; override `POPPY_CALLER_ORIGIN` / `POPPY_RECEIVER_ORIGIN` to test an isolated deployment.

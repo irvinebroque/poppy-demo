@@ -4,14 +4,14 @@ import type {
   JsonValue,
   Message,
   TextContent,
-  UserMessage
+  UserMessage,
 } from "@earendil-works/pi-ai";
 import type { EntryRecord } from "@earendil-works/pi-durable";
 
 /**
  * This app's display model for a transcript. The harness returns pi's own
- * entries; the UI folds them into these messages, on the server for a
- * snapshot and in the browser for streamed events.
+ * entries; the server projects them into these messages before returning
+ * the display snapshot to the browser.
  */
 export type PiMessagePart =
   | TextContent
@@ -44,12 +44,10 @@ export type PiMessage = {
 };
 
 function userParts(content: UserMessage["content"]): PiMessagePart[] {
-  return typeof content === "string"
-    ? [{ type: "text", text: content }]
-    : content;
+  return Array.isArray(content) ? content : [{ type: "text", text: content }];
 }
 
-function assistantParts(content: AssistantMessage["content"]): PiMessagePart[] {
+export function assistantParts(content: AssistantMessage["content"]): PiMessagePart[] {
   return content.map((part): PiMessagePart => {
     switch (part.type) {
       case "text":
@@ -61,7 +59,7 @@ function assistantParts(content: AssistantMessage["content"]): PiMessagePart[] {
           type: "tool-call",
           id: part.id,
           name: part.name,
-          arguments: part.arguments
+          arguments: part.arguments,
         };
     }
   });
@@ -78,7 +76,7 @@ export function projectMessage(message: Message, id: string): PiMessage {
         id,
         role: "user",
         parts: userParts(message.content),
-        timestamp: message.timestamp
+        timestamp: message.timestamp,
       };
     case "assistant":
       return {
@@ -87,9 +85,7 @@ export function projectMessage(message: Message, id: string): PiMessage {
         parts: assistantParts(message.content),
         timestamp: message.timestamp,
         stopReason: message.stopReason,
-        ...(message.errorMessage === undefined
-          ? {}
-          : { error: message.errorMessage })
+        error: message.errorMessage,
       };
     case "toolResult":
       return {
@@ -101,13 +97,11 @@ export function projectMessage(message: Message, id: string): PiMessage {
             id: message.toolCallId,
             name: message.toolName,
             content: message.content,
-            ...(message.details === undefined
-              ? {}
-              : { details: message.details }),
-            error: message.isError
-          }
+            details: message.details,
+            error: message.isError,
+          },
         ],
-        timestamp: message.timestamp
+        timestamp: message.timestamp,
       };
   }
 }
@@ -119,21 +113,25 @@ export function projectMessage(message: Message, id: string): PiMessage {
  */
 export function projectEntry(entry: EntryRecord): PiMessage | undefined {
   const message = entry.model?.[0];
+
   if (entry.kind === "pi.reset") {
     return {
       id: String(entry.id),
       role: "notice",
       parts: [{ type: "text", text: "Context reset" }],
-      timestamp: 0
+      timestamp: 0,
     };
   }
+
   if (entry.kind === "pi.system" || message === undefined) return undefined;
+
   return projectMessage(message, String(entry.id));
 }
 
 export function projectEntries(entries: readonly EntryRecord[]): PiMessage[] {
   return entries.flatMap((entry) => {
     const message = projectEntry(entry);
+
     return message ? [message] : [];
   });
 }
