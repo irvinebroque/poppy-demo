@@ -170,6 +170,8 @@ export class PrivateSearch {
     return view;
   }
   async search(query: string, loseResponse = false) {
+    if (!GUAC_AVAILABLE) fail("private_search_unavailable", 503);
+
     if (!query.trim() || query.length > 80) fail("invalid_search");
 
     if (this.view().pending) fail("recover_search_first", 409);
