@@ -36,6 +36,14 @@ export const discoverySchema = z.object({
   protocol_version: z.string(),
   supported_versions: z.record(z.string(), z.string()).optional(),
   organization: z.object({ name: z.string(), domain: z.string() }),
+  extensions: z
+    .object({
+      mole: z
+        .array(z.object({ version: z.string(), moderator_config_uri: z.string().optional() }))
+        .optional(),
+    })
+    .optional(),
+  web: z.object({ disabled: z.boolean().optional() }).optional(),
   auth: z
     .object({
       issuer: z.string().optional(),
@@ -178,6 +186,9 @@ export const actionInputSchema = z.object({
   text: z.string().optional(),
   sender: z.enum(["agent", "human"]).optional(),
   conversation: idSchema.optional(),
+  lose_response: z.boolean().optional(),
+  invite: z.string().min(1).max(256).optional(),
+  product_ids: z.array(idSchema).min(1).max(2).optional(),
 });
 
 export type ActionInput = z.infer<typeof actionInputSchema>;

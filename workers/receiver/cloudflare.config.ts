@@ -11,10 +11,15 @@ export default defineConfig({
     workersDev: true,
     observability: { enabled: true, headSamplingRate: 1 },
     exports: {
+      MoleAnchor: exports.durableObject({ storage: "sqlite" }),
+      MoleModerator: exports.durableObject({ storage: "sqlite" }),
       CompanyUser: exports.durableObject({ storage: "sqlite" }),
       ReplayGuard: exports.durableObject({ storage: "sqlite" }),
     },
     env: {
+      MOLE_MODERATOR_CONFIG_URI: bindings.text(process.env.POPPY_MOLE_MODERATOR_CONFIG_URI ?? ""),
+      MOLE_PROVIDER_ORIGIN: bindings.text(process.env.POPPY_MOLE_PROVIDER_ORIGIN ?? ""),
+      MOLE_ANCHOR_ACCOUNTS: bindings.secret(),
       CALLER_ORIGIN: bindings.text(process.env.POPPY_CALLER_ORIGIN ?? "http://localhost:8787"),
       RECEIVER_ORIGIN: bindings.text(process.env.POPPY_RECEIVER_ORIGIN ?? "http://localhost:8788"),
       LOCAL_DEMO: bindings.text(process.env.POPPY_LOCAL_DEMO ?? "true"),
@@ -22,6 +27,8 @@ export default defineConfig({
         process.env.POPPY_BOOTSTRAP === "true"
           ? undefined
           : bindings.worker({ worker: process.env.POPPY_CALLER_NAME ?? "poppy-caller" }),
+      MOLE_ANCHOR: bindings.durableObject({ worker, exportName: "MoleAnchor" }),
+      MOLE_MODERATOR: bindings.durableObject({ worker, exportName: "MoleModerator" }),
       OWNERS: bindings.durableObject({ worker, exportName: "CompanyUser" }),
       GUARDS: bindings.durableObject({ worker, exportName: "ReplayGuard" }),
     },

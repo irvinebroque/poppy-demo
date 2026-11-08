@@ -1,6 +1,7 @@
 import { test, beforeAll, afterAll } from "vite-plus/test";
 import assert from "node:assert/strict";
 import { buildWorker } from "./build-worker.mjs";
+import { guacAvailable } from "../scripts/prepare-guac.mjs";
 import { Miniflare } from "miniflare";
 import { generateKeyPair, exportJWK, SignJWT, calculateJwkThumbprint } from "jose";
 
@@ -265,7 +266,7 @@ beforeAll(async () => {
           domains: ["store.test"],
           compatibilityDate: "2026-10-09",
           compatibilityFlags: ["nodejs_compat"],
-          manifest: manifest(source),
+          manifest: source,
           exports: {
             CompanyUser: { type: "durable-object", storage: "sqlite" },
             ReplayGuard: { type: "durable-object", storage: "sqlite" },
@@ -315,7 +316,12 @@ test("0.4 discovery uses described company scopes and reciprocal RFC 9728 resour
   assert.equal(api.openapi, "3.1.0");
   assert.ok(api.paths["/api/orders"]);
   assert.equal(d.web.browser_session_endpoint, undefined);
-  assert.equal(d.extensions, undefined);
+
+  if (await guacAvailable())
+    assert.deepEqual(d.extensions, {
+      mole: [{ version: "1", moderator_config_uri: company + "/mole/moderator/config" }],
+    });
+  else assert.equal(d.extensions, undefined);
 });
 
 test("signed-out requests need only a delegated Session JWT; no token grant", async () => {

@@ -8,3 +8,10 @@ dist/
 workers/caller/public/
 
 .cloudflare/
+
+# Internal Guac source and generated crypto are fetched locally, never published.
+vendor/.guac-source/
+vendor/guac/*
+!vendor/guac/UPSTREAM.md
+
+.private-browser.json
