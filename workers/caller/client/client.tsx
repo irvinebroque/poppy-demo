@@ -31,6 +31,7 @@ import { Streamdown } from "streamdown";
 import type { ToolInfo, TranscriptMessage, TranscriptPart } from "./protocol";
 import { usePiSession } from "./use-pi-session";
 import "./styles.css";
+import { PrivateSearchPanel } from "./private-search";
 
 // Kumo owns this prop name; share the same sizing for all icon buttons.
 const ICON_BUTTON_PROPS = { ["shape"]: "square" } as const;
@@ -372,7 +373,7 @@ function App() {
   const runningTools = running_.map((tool) => tool.name);
 
   useEffect(() => {
-    endRef.current?.scrollIntoView({ behavior: "smooth" });
+    if (messages.length || live || running) endRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, live, running]);
 
   const connected = status === "open";
@@ -441,8 +442,9 @@ function App() {
 
         <main className="min-h-0 flex-1 overflow-y-auto">
           <div className="mx-auto max-w-3xl space-y-5 px-5 py-6">
+            <PrivateSearchPanel />
             {empty ? (
-              <div className="py-10 sm:py-16">
+              <div className="py-4 sm:py-6">
                 <Empty
                   icon={<BrainIcon size={32} />}
                   title="What can I help with?"

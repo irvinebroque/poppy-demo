@@ -178,6 +178,8 @@ export const actionInputSchema = z.object({
   text: z.string().optional(),
   sender: z.enum(["agent", "human"]).optional(),
   conversation: idSchema.optional(),
+  lose_response: z.boolean().optional(),
+  product_ids: z.array(idSchema).min(1).max(2).optional(),
 });
 
 export type ActionInput = z.infer<typeof actionInputSchema>;

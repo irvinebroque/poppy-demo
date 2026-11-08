@@ -13,12 +13,14 @@
     "test": "vp test run",
     "build": "vp run build:ui && node scripts/cf.mjs deploy --dry-run",
     "deploy": "vp run build:ui && node scripts/deploy.mjs",
-    "postinstall": "node scripts/cf.mjs",
+    "postinstall": "node scripts/prepare-guac.mjs --optional && node scripts/cf.mjs",
     "smoke:live": "node tests/live-smoke.mjs",
     "build:ui": "vp build",
     "prepare": "vp config --no-agent",
     "lint": "vp lint --deny-warnings",
-    "fmt": "vp fmt"
+    "fmt": "vp fmt",
+    "build:guac": "node scripts/build-guac.mjs",
+    "test:mole": "node scripts/prepare-guac.mjs --require && vp test run tests/private-search.test.mjs"
   },
   "dependencies": {
     "@cloudflare/kumo": "^2.14.0",

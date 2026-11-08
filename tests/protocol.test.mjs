@@ -265,7 +265,7 @@ beforeAll(async () => {
           domains: ["store.test"],
           compatibilityDate: "2026-10-09",
           compatibilityFlags: ["nodejs_compat"],
-          manifest: manifest(source),
+          manifest: source,
           exports: {
             CompanyUser: { type: "durable-object", storage: "sqlite" },
             ReplayGuard: { type: "durable-object", storage: "sqlite" },

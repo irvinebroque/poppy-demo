@@ -31,7 +31,7 @@ Browser ── visitor cookie ── Caller Worker / CallerSession (Agent + PiHa
            ReplayGuard + CompanyUser (SQLite Durable Objects)
 ```
 
-The caller supplies a hosted Client ID Metadata Document and JWKS. The receiver trusts only this configured peer. Each caller visitor has a random, company-specific opaque user ID, a separate DPoP key, and durable private token storage. OAuth tokens, Session JWTs, delegations, and signing keys do not enter the model transcript or browser state. The Workers communicate through service bindings while signing and validating their public HTTPS request URLs.
+The caller supplies a hosted Client ID Metadata Document and JWKS. The receiver trusts only this configured peer. When a Poppy session starts, the caller creates a random, company-specific opaque user ID and a separate DPoP key. Token storage remains private and durable. OAuth tokens, Session JWTs, delegations, and signing keys do not enter the model transcript or browser state. The Workers communicate through service bindings while signing and validating their public HTTPS request URLs.
 
 ## Protocol coverage
 
@@ -48,6 +48,29 @@ Draft 0.4 is the current **in-progress draft**, not a frozen release. This imple
 The receiver's company replies are deterministic fixtures. It has no staffed human support desk; handoff truthfully returns to its agent. It uses JSON event responses rather than an SSE stream. Optional extensions (including Operations and Mediated Sign-In), device authorization, MCP, and browser-session join are not advertised or implemented. This is a focused interoperability demo, not a complete protocol conformance suite.
 
 This demo implements its OAuth, Session, and conversation layers directly using `jose` and Durable Objects.
+
+## Optional MOLE private search
+
+This adds a separate, read-only private search path around the existing Poppy 0.4 implementation. The public checkout runs the original Poppy demo; enabling MOLE requires access to the pinned internal Guac prototype. It is not a Poppy extension or a change to Poppy's wire format.
+
+```sh
+# Requires internal GitLab SSH access, Rust, wasm-pack and Python 3.10+.
+# The helper can install its pinned Emscripten SDK.
+vp run build:guac
+vp run test:mole
+vp run dev
+```
+
+1. In **Browse privately. Remember by choice.**, search for a warmer jacket. The caller's durable Guac wallet obtains 24 credits from the demo Anchor/Moderator flow and spends one credit per search. Private browsing creates no Poppy User ID or Session.
+2. Select **Lose the next search response**, then search. **Recover search** resends the saved request within 60 seconds and retrieves the recorded result and credential update without another execution or debit. The continuation survives a caller isolate restart.
+3. Check the products to share and select **Save shortlist with Poppy**. This explicit approval starts Poppy continuity and sends only those product facts in a human-authored 0.4 message. Repeating the save uses the same request ID. The model cannot approve sharing. The query, wallet, proof, eligibility ID and credit balance stay out of that message.
+4. Continue with the existing account sign-in and simulated exchange flow. Account access still requires separate OAuth approval. Existing Poppy or account credentials never accompany private search.
+
+The browser panel and Pi's `private_search` / `recover_private_search` actions share one wallet per caller visitor. The six private routes use a restricted service-binding transport with fresh headers. A separate `MoleAnchor` Durable Object grants one synthetic endorsement per wallet per day; `MoleModerator` verifies real Guac proofs and atomically records the result, nullifier, recovery record and execution count. A spent-out wallet is not silently refilled, including after starting a new chat.
+
+`vp install --frozen-lockfile` does not fetch internal source. Without built Guac artifacts, the panel is hidden, private endpoints return 503, and the real-crypto suite is explicitly skipped. `vp run test:mole` fails if Guac is absent. No disabled adapter can issue a credential or validate a proof. The internal source and generated Wasm stay ignored; see [dependency provenance and build requirements](vendor/guac/UPSTREAM.md).
+
+This is a single-operator prototype with synthetic eligibility, fixed keys and no bounded replay-store cleanup. Resetting the visitor cookie creates another wallet. It demonstrates credential unlinkability at the protocol layer, not network anonymity: queries, logs, timing and infrastructure can correlate activity. It adds neither native-browser credentials nor browser credential injection.
 
 ## Develop
 

@@ -11,6 +11,8 @@ export default defineConfig({
     workersDev: true,
     observability: { enabled: true, headSamplingRate: 1 },
     exports: {
+      MoleAnchor: exports.durableObject({ storage: "sqlite" }),
+      MoleModerator: exports.durableObject({ storage: "sqlite" }),
       CompanyUser: exports.durableObject({ storage: "sqlite" }),
       ReplayGuard: exports.durableObject({ storage: "sqlite" }),
     },
@@ -22,6 +24,8 @@ export default defineConfig({
         process.env.POPPY_BOOTSTRAP === "true"
           ? undefined
           : bindings.worker({ worker: process.env.POPPY_CALLER_NAME ?? "poppy-caller" }),
+      MOLE_ANCHOR: bindings.durableObject({ worker, exportName: "MoleAnchor" }),
+      MOLE_MODERATOR: bindings.durableObject({ worker, exportName: "MoleModerator" }),
       OWNERS: bindings.durableObject({ worker, exportName: "CompanyUser" }),
       GUARDS: bindings.durableObject({ worker, exportName: "ReplayGuard" }),
     },

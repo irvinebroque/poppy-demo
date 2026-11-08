@@ -1,3 +1,4 @@
+import { products } from "../../../shared/catalog";
 import { page } from "../../../shared/ui";
 import { escape } from "../../../shared/protocol";
 
@@ -6,28 +7,6 @@ function header(caller?: string) {
 }
 
 const footer = `<footer><span>Northstar Outfitters</span><span>A fictional store. No purchases, charges, or shipments.</span></footer>`;
-
-const products = {
-  "stormline-shell": {
-    name: "Stormline Shell",
-    price: 180,
-    color: "#657b68",
-    lining: "#4c5f4e",
-    description: "A lightweight waterproof shell for wet trails and everyday weather.",
-    details: ["Waterproof outer fabric", "Adjustable hood and cuffs", "Two zippered hand pockets"],
-    subtitle: "Lightweight weather protection",
-  },
-  "stormline-insulated": {
-    name: "Stormline Insulated Jacket",
-    price: 250,
-    color: "#c5a276",
-    lining: "#9f7c53",
-    description:
-      "The weather protection of our Stormline shell, with added insulation for colder days.",
-    details: ["Waterproof outer fabric", "Warm insulated lining", "Adjustable hood and cuffs"],
-    subtitle: "Extra warmth for colder days",
-  },
-};
 
 function jacket(name: string, color: string, lining: string, insulated = false) {
   return `<svg class="product-image" viewBox="0 0 480 360" role="img" aria-label="${escape(name)}"><ellipse cx="240" cy="323" rx="113" ry="8" fill="#e2e3da"/><path d="M215 60q25-24 50 0l10 35 49 21 63 150-48 21-37-89 5 116H173l5-116-37 89-48-21 63-150 49-21Z" fill="${color}" stroke="${lining}" stroke-width="2"/><path d="M215 60q25-16 50 0l-5 35h-40Z" fill="${lining}"/><path d="M205 95q35 22 70 0M240 103v211" fill="none" stroke="${lining}" stroke-width="3"/><path d="m184 241 28-15m84 15-28-15" fill="none" stroke="${lining}" stroke-width="3"/>${insulated ? '<path d="M178 155h124M177 186h126M176 218h37m55 0h36M174 277h132" fill="none" stroke="#9f7c53" stroke-opacity=".4"/>' : ""}<path d="m93 266 48 21m198 0 48-21" stroke="${lining}" stroke-width="7"/><circle cx="242" cy="129" r="2" fill="#e5e4d8"/></svg>`;

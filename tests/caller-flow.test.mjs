@@ -1,3 +1,4 @@
+import { guacAvailable } from "../scripts/prepare-guac.mjs";
 import { snapshotSchema } from "../workers/caller/client/view-schema";
 import { test, beforeAll } from "vite-plus/test";
 import assert from "node:assert/strict";
@@ -39,7 +40,7 @@ async function demo(t, tokenMode = "normal") {
           domains: ["caller.test"],
           compatibilityDate: "2026-10-09",
           compatibilityFlags: ["nodejs_compat"],
-          manifest: manifest(callerBuild),
+          manifest: callerBuild,
           exports: {
             AgentIdentity: { type: "durable-object", storage: "sqlite" },
             CallerSession: { type: "durable-object", storage: "sqlite" },
@@ -62,7 +63,7 @@ async function demo(t, tokenMode = "normal") {
           domains: ["store.test"],
           compatibilityDate: "2026-10-09",
           compatibilityFlags: ["nodejs_compat"],
-          manifest: manifest(receiverBuild),
+          manifest: receiverBuild,
           exports: {
             CompanyUser: { type: "durable-object", storage: "sqlite" },
             ReplayGuard: { type: "durable-object", storage: "sqlite" },
@@ -316,3 +317,26 @@ test("caller rejects malformed browser commands before dispatch", async (t) => {
     assert.equal((await response.json()).error, "invalid_request");
   }
 });
+
+test(
+  "public checkout keeps private search unavailable without Guac",
+  { skip: await guacAvailable() },
+  async (t) => {
+    const setup = await demo(t);
+    const { action, state } = await session(setup);
+    assert.equal((await state()).private_access.available, false);
+    const tools = await (await setup.fetch(setup.caller + "/api/pi/view")).json();
+    assert.doesNotMatch(tools.tools[0].description, /shortlist|private search/i);
+    assert.equal(
+      (await action("private-search", { text: "jacket" }, 503)).error,
+      "private_search_unavailable",
+    );
+
+    const response = await setup.fetch(setup.store + "/private/search?q=jacket", {
+      method: "POST",
+    });
+
+    assert.equal(response.status, 503);
+    assert.equal((await response.json()).error, "private_search_unavailable");
+  },
+);

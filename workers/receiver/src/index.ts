@@ -34,6 +34,10 @@ import { storePage, consentPage, productPage } from "./ui";
 
 export { CompanyUser, ReplayGuard };
 
+export { MoleAnchor, MoleModerator } from "./mole";
+
+import { moleRequest } from "./mole";
+
 const clientId = (env: ReceiverEnv) => env.CALLER_ORIGIN + "/agent.json";
 
 function guard(env: ReceiverEnv, key: string) {
@@ -304,6 +308,10 @@ async function handle(request: Request, env: ReceiverEnv): Promise<Response> {
   const path = url.pathname;
   const origin = env.RECEIVER_ORIGIN;
   permittedUrl(origin, env.LOCAL_DEMO === "true");
+
+  const privateResponse = await moleRequest(request, env);
+
+  if (privateResponse) return privateResponse;
 
   if (path === "/" && request.method === "GET")
     return new Response(storePage(env.CALLER_ORIGIN), {
