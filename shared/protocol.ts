@@ -1,8 +1,10 @@
 import { SignJWT, importJWK, exportJWK, generateKeyPair, jwtVerify, decodeProtectedHeader, calculateJwkThumbprint, type JWK, type JWTPayload } from 'jose';
 
-export const JWT_GRANT = 'urn:ietf:params:oauth:grant-type:jwt-bearer';
+export const PROTOCOL_VERSION = '0.4';
+export const validId = (value: unknown): value is string => typeof value === 'string' && /^[A-Za-z0-9_-]{1,256}$/.test(value);
 export const CLIENT_ASSERTION = 'urn:ietf:params:oauth:client-assertion-type:jwt-bearer';
-export const SCOPES = ['poppy:read', 'poppy:write'];
+export const SCOPES = ['orders:read', 'orders:write'];
+const REQUEST_JWT_WINDOW = 60;
 export const now = () => Math.floor(Date.now() / 1000);
 export const id = (prefix = '') => prefix + crypto.randomUUID().replaceAll('-', '');
 export function randomSecret() { return b64(crypto.getRandomValues(new Uint8Array(32))); }
@@ -34,8 +36,12 @@ export function json(body: unknown, status = 200, headers: HeadersInit = {}) {
 export function errorResponse(error: unknown, challenge = false) {
   const e = error instanceof ProtocolError ? error : new ProtocolError('server_error', 500);
   const headers: Record<string, string> = {};
-  if (challenge || ['invalid_token', 'invalid_dpop_proof', 'sign_in_required', 'insufficient_scope'].includes(e.code)) {
-    headers['WWW-Authenticate'] = `DPoP error="${e.code}"${e.extra.scope ? `, scope="${e.extra.scope}"` : ''}`;
+  if (e.code === 'account_required') {
+    headers['WWW-Authenticate'] = `DPoP scope="${e.extra.scope ?? ''}"`;
+    return json({}, 401, headers);
+  }
+  if (challenge || ['invalid_token', 'invalid_dpop_proof', 'insufficient_scope'].includes(e.code)) {
+    headers['WWW-Authenticate'] = `DPoP error="${e.code}"${e.extra.scope ? `, scope="${e.extra.scope}"` : ''}${e.extra.resource_metadata ? `, resource_metadata="${e.extra.resource_metadata}"` : ''}`;
   }
   return json({ error: e.code, ...e.extra }, e.status, headers);
 }
@@ -79,8 +85,8 @@ export async function verifyProof(request: Request, token?: string) {
     const header = decodeProtectedHeader(jwt);
     if (header.typ !== 'dpop+jwt' || header.alg !== 'ES256' || !header.jwk || ('d' in header.jwk) || header.jwk.kty !== 'EC' || header.jwk.crv !== 'P-256') fail('invalid_dpop_proof');
     const { payload } = await jwtVerify(jwt, await importJWK(header.jwk, 'ES256'), { algorithms: ['ES256'], requiredClaims: ['jti', 'iat'] });
-    if (payload.htm !== request.method || payload.htu !== target(request.url) || typeof payload.iat !== 'number' || Math.abs(now() - payload.iat) > 60 || typeof payload.jti !== 'string' || !payload.jti || (token && payload.ath !== await hash(token)) || (!token && payload.ath !== undefined)) fail('invalid_dpop_proof');
-    return { thumbprint: await calculateJwkThumbprint(header.jwk), jti: payload.jti };
+    if (payload.htm !== request.method || payload.htu !== target(request.url) || typeof payload.iat !== 'number' || Math.abs(now() - payload.iat) > REQUEST_JWT_WINDOW || typeof payload.jti !== 'string' || !payload.jti || (token && payload.ath !== await hash(token)) || (!token && payload.ath !== undefined)) fail('invalid_dpop_proof');
+    return { thumbprint: await calculateJwkThumbprint(header.jwk), jti: payload.jti, replayExpiresAt: Math.ceil(payload.iat + REQUEST_JWT_WINDOW) };
   } catch { fail('invalid_dpop_proof', token ? 401 : 400); }
 }
 export function cookie(request: Request, name: string) {
@@ -94,6 +100,31 @@ export function securityHeaders(response: Response) {
   response.headers.set('X-Frame-Options', 'DENY'); return response;
 }
 export type RpcResult = { status: number; body: Record<string, unknown> };
-export type Message = { id: string; sender: 'agent' | 'human'; text?: string; data?: Record<string, unknown>; context?: Record<string, unknown> };
+export type Message = { author: { type: 'agent' | 'human' }; text?: string; data?: Record<string, unknown>; context?: Record<string, unknown>; extensions?: Record<string, Record<string, unknown>>; as_of_cursor?: string };
 export type Event = { id: string; type: string; created_at: string; [key: string]: unknown };
-export type TokenResponse = { access_token: string; token_type: 'DPoP'; expires_in: number; scope: string; session_id: string; signed_in: boolean; refresh_token?: string; refresh_token_expires_in?: number };
+export type ConversationState = { working: boolean; handoff: 'none' | 'pending'; responder: 'agent' | 'human'; closed: boolean };
+export type TokenResponse = { access_token: string; token_type: 'DPoP'; expires_in: number; scope: string; refresh_token?: string };
+
+export async function sessionJwt(keys: KeyPair, delegation: string, client: string, audience: string, user: string, session: string, method: string, url: string, token?: string) {
+  return new SignJWT({ iss: client, aud: audience, sub: user, sid: session, htm: method, htu: target(url), iat: now(), jti: id(), ...(token ? { ath: await hash(token) } : {}) })
+    .setProtectedHeader({ alg: 'ES256', typ: 'poppy-session+jwt', kid: await calculateJwkThumbprint(keys.public), poppy_dlg: delegation })
+    .sign(await importJWK(keys.private, 'ES256'));
+}
+
+export async function verifySession(request: Request, keys: JWK[], client: string, audience: string, token?: string) {
+  try {
+    const jwt = request.headers.get('Poppy-Session'); if (!jwt) fail('invalid_session');
+    const header = decodeProtectedHeader(jwt);
+    if (header.alg !== 'ES256' || header.typ !== 'poppy-session+jwt' || typeof header.poppy_dlg !== 'string') fail('invalid_session');
+    const dh = decodeProtectedHeader(header.poppy_dlg);
+    const key = keys.find(k => k.kid === dh.kid);
+    if (dh.alg !== 'ES256' || dh.typ !== 'poppy-delegation+jwt' || !key || key.d) fail('invalid_session');
+    const { payload: dlg } = await jwtVerify(header.poppy_dlg, await importJWK(key, 'ES256'), { algorithms: ['ES256'], issuer: client, requiredClaims: ['iat', 'exp', 'jti', 'cnf'] });
+    if (typeof dlg.iat !== 'number' || typeof dlg.exp !== 'number' || dlg.iat > now() + 5 || dlg.exp <= dlg.iat || dlg.exp - dlg.iat > 86400 || typeof dlg.jti !== 'string' || !dlg.jti) fail('invalid_session');
+    const publicKey = (dlg.cnf as { jwk?: JWK })?.jwk;
+    if (!publicKey || publicKey.d || publicKey.kty !== 'EC' || publicKey.crv !== 'P-256' || header.kid !== await calculateJwkThumbprint(publicKey)) fail('invalid_session');
+    const { payload: p } = await jwtVerify(jwt, await importJWK(publicKey, 'ES256'), { algorithms: ['ES256'], issuer: client, audience, requiredClaims: ['sid', 'sub', 'htm', 'htu', 'iat', 'jti'] });
+    if (p.aud !== audience || !validId(p.sid) || typeof p.sub !== 'string' || !p.sub || (p.agent_id !== undefined && (typeof p.agent_id !== 'string' || !p.agent_id)) || p.htm !== request.method || p.htu !== target(request.url) || typeof p.iat !== 'number' || Math.abs(now() - p.iat) > REQUEST_JWT_WINDOW || typeof p.jti !== 'string' || !p.jti || (token ? p.ath !== await hash(token) : p.ath !== undefined)) fail('invalid_session');
+    return { user: p.sub, session: p.sid, jti: p.jti, agent: p.agent_id as string | undefined, replayExpiresAt: Math.ceil(p.iat + REQUEST_JWT_WINDOW) };
+  } catch { fail('invalid_session'); }
+}
