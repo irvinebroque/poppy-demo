@@ -1,3 +1,5 @@
+import { StrictMode } from "react";
+import { z } from "zod";
 // Adapted from Cloudflare agents/examples/next/harnesses/pi; MIT license in licenses/cloudflare-agents.txt.
 import {
   Badge,
@@ -6,7 +8,7 @@ import {
   InputArea,
   PoweredByCloudflare,
   Surface,
-  Text
+  Text,
 } from "@cloudflare/kumo";
 import {
   BrainIcon,
@@ -19,7 +21,7 @@ import {
   SunIcon,
   WrenchIcon,
   XCircleIcon,
-  XIcon
+  XIcon,
 } from "@phosphor-icons/react";
 import { code } from "@streamdown/code";
 import { useEffect, useRef, useState } from "react";
@@ -30,25 +32,37 @@ import type { ToolInfo, TranscriptMessage, TranscriptPart } from "./protocol";
 import { usePiSession } from "./use-pi-session";
 import "./styles.css";
 
+// Kumo owns this prop name; share the same sizing for all icon buttons.
+const ICON_BUTTON_PROPS = { ["shape"]: "square" } as const;
+
 const SESSION_KEY = "pi-harness-session";
 
 const SUGGESTIONS = [
-  { icon: <WrenchIcon size={15} />, label: "Explore jackets", value: "Ask Northstar Outfitters about warmer jackets. I have a Stormline shell and want something insulated." },
-  { icon: <CheckCircleIcon size={15} />, label: "Exchange my jacket", value: "Help me exchange order #1042 for the insulated Stormline jacket." }
+  {
+    icon: <WrenchIcon size={15} />,
+    label: "Explore jackets",
+    value:
+      "Ask Northstar Outfitters about warmer jackets. I have a Stormline shell and want something insulated.",
+  },
+  {
+    icon: <CheckCircleIcon size={15} />,
+    label: "Exchange my jacket",
+    value: "Help me exchange order #1042 for the insulated Stormline jacket.",
+  },
 ] satisfies Array<{ icon: ReactNode; label: string; value: string }>;
 
 function getSession(): string {
   const existing = localStorage.getItem(SESSION_KEY);
+
   if (existing) return existing;
   const created = crypto.randomUUID();
   localStorage.setItem(SESSION_KEY, created);
+
   return created;
 }
 
 function ModeToggle() {
-  const [mode, setMode] = useState(
-    () => localStorage.getItem("theme") ?? "light"
-  );
+  const [mode, setMode] = useState(() => localStorage.getItem("theme") ?? "light");
 
   useEffect(() => {
     document.documentElement.setAttribute("data-mode", mode);
@@ -59,7 +73,7 @@ function ModeToggle() {
   return (
     <Button
       variant="ghost"
-      shape="square"
+      {...ICON_BUTTON_PROPS}
       aria-label="Toggle theme"
       onClick={() => setMode((value) => (value === "light" ? "dark" : "light"))}
       icon={mode === "light" ? <MoonIcon size={16} /> : <SunIcon size={16} />}
@@ -67,17 +81,19 @@ function ModeToggle() {
   );
 }
 
-function JsonBlock({ value }: { value: unknown }) {
+function JsonBlock({ value }: { value: import("@earendil-works/pi-ai").JsonValue }) {
+  const text = z.string().safeParse(value);
+
   return (
     <pre className="max-h-40 overflow-auto rounded-lg bg-kumo-elevated p-2.5 text-xs leading-5 whitespace-pre-wrap break-words">
-      {typeof value === "string" ? value : JSON.stringify(value, null, 2)}
+      {text.success ? text.data : JSON.stringify(value, null, 2)}
     </pre>
   );
 }
 
 function ToolCallCard({
   part,
-  running
+  running,
 }: {
   part: Extract<TranscriptPart, { type: "tool-call" }>;
   running: boolean;
@@ -90,9 +106,7 @@ function ToolCallCard({
         ) : (
           <CheckCircleIcon size={14} className="text-kumo-success" />
         )}
-        <span className="min-w-0 flex-1 truncate text-xs font-semibold">
-          {part.name}
-        </span>
+        <span className="min-w-0 flex-1 truncate text-xs font-semibold">{part.name}</span>
         <Badge variant="secondary">{running ? "Running" : "Called"}</Badge>
       </summary>
       <div className="border-t border-kumo-line px-3 py-3">
@@ -105,16 +119,13 @@ function ToolCallCard({
   );
 }
 
-function ToolResultCard({
-  part
-}: {
-  part: Extract<TranscriptPart, { type: "tool-result" }>;
-}) {
+function ToolResultCard({ part }: { part: Extract<TranscriptPart, { type: "tool-result" }> }) {
   const text = part.content
-    .filter((content) => content.type === "text")
-    .map((content) => (content.type === "text" ? content.text : ""))
+    .flatMap((content) => (content.type === "text" ? [content.text] : []))
     .join("\n");
+
   const images = part.content.filter((content) => content.type === "image");
+
   return (
     <details className="rounded-xl border border-kumo-line bg-kumo-base">
       <summary className="flex cursor-pointer list-none items-center gap-2 px-3 py-2.5">
@@ -148,7 +159,7 @@ function ToolResultCard({
               alt={`${part.name} output`}
               className="max-w-full rounded-lg"
             />
-          ) : null
+          ) : null,
         )}
         {part.details !== undefined ? (
           <div>
@@ -163,21 +174,11 @@ function ToolResultCard({
   );
 }
 
-function AssistantPart({
-  part,
-  running
-}: {
-  part: TranscriptPart;
-  running: boolean;
-}) {
+function AssistantPart({ part, running }: { part: TranscriptPart; running: boolean }) {
   switch (part.type) {
     case "text":
       return (
-        <Streamdown
-          className="sd-theme text-sm leading-6"
-          plugins={{ code }}
-          controls={false}
-        >
+        <Streamdown className="sd-theme text-sm leading-6" plugins={{ code }} controls={false}>
           {part.text}
         </Streamdown>
       );
@@ -208,9 +209,8 @@ function AssistantPart({
 }
 
 function UserMessage({ message }: { message: TranscriptMessage }) {
-  const text = message.parts
-    .map((part) => (part.type === "text" ? part.text : ""))
-    .join("");
+  const text = message.parts.map((part) => (part.type === "text" ? part.text : "")).join("");
+
   return (
     <div className="flex justify-end">
       <div className="max-w-[85%] whitespace-pre-wrap rounded-2xl rounded-br-md bg-kumo-contrast px-4 py-2.5 text-sm leading-relaxed text-kumo-inverse">
@@ -223,7 +223,7 @@ function UserMessage({ message }: { message: TranscriptMessage }) {
 function AssistantMessage({
   message,
   streaming = false,
-  runningTools
+  runningTools,
 }: {
   message: TranscriptMessage;
   streaming?: boolean;
@@ -239,11 +239,7 @@ function AssistantMessage({
           <AssistantPart
             key={`${message.id}-${index}`}
             part={part}
-            running={
-              streaming &&
-              part.type === "tool-call" &&
-              runningTools.includes(part.name)
-            }
+            running={streaming && part.type === "tool-call" && runningTools.includes(part.name)}
           />
         ))}
         {streaming ? <span className="streaming-cursor" /> : null}
@@ -266,7 +262,7 @@ function ToolMessage({ message }: { message: TranscriptMessage }) {
       {message.parts.map((part, index) =>
         part.type === "tool-result" ? (
           <ToolResultCard key={`${message.id}-${index}`} part={part} />
-        ) : null
+        ) : null,
       )}
     </div>
   );
@@ -275,7 +271,7 @@ function ToolMessage({ message }: { message: TranscriptMessage }) {
 function Message({
   message,
   streaming = false,
-  runningTools
+  runningTools,
 }: {
   message: TranscriptMessage;
   streaming?: boolean;
@@ -286,20 +282,14 @@ function Message({
       return <UserMessage message={message} />;
     case "assistant":
       return (
-        <AssistantMessage
-          message={message}
-          streaming={streaming}
-          runningTools={runningTools}
-        />
+        <AssistantMessage message={message} streaming={streaming} runningTools={runningTools} />
       );
     case "tool":
       return <ToolMessage message={message} />;
     case "notice":
       return message.parts.length === 0 ? null : (
         <p className="text-center text-xs text-kumo-inactive">
-          {message.parts
-            .map((part) => (part.type === "text" ? part.text : ""))
-            .join("")}
+          {message.parts.map((part) => (part.type === "text" ? part.text : "")).join("")}
         </p>
       );
   }
@@ -308,7 +298,7 @@ function Message({
 function Sidebar({
   tools,
   activeTools,
-  onClose
+  onClose,
 }: {
   tools: readonly ToolInfo[];
   activeTools: readonly string[];
@@ -325,7 +315,7 @@ function Sidebar({
         </Text>
         <Button
           variant="ghost"
-          shape="square"
+          {...ICON_BUTTON_PROPS}
           aria-label="Close tools"
           onClick={onClose}
           icon={<XIcon size={16} />}
@@ -333,10 +323,7 @@ function Sidebar({
       </div>
       <div className="min-h-0 flex-1 space-y-2 overflow-y-auto p-3">
         {tools.map((tool) => (
-          <Surface
-            key={tool.name}
-            className="rounded-lg p-3 ring ring-kumo-line"
-          >
+          <Surface key={tool.name} className="rounded-lg p-3 ring ring-kumo-line">
             <div className="flex items-center gap-2">
               {activeTools.includes(tool.name) ? (
                 <GearIcon size={14} className="animate-spin text-kumo-accent" />
@@ -355,10 +342,15 @@ function Sidebar({
 
 function App() {
   const [session, setSession] = useState(getSession);
-  const [prompt, setPrompt] = useState(() => new URLSearchParams(window.location.search).get("prompt")?.slice(0, 8000) ?? "");
+
+  const [prompt, setPrompt] = useState(
+    () => new URLSearchParams(window.location.search).get("prompt")?.slice(0, 8000) ?? "",
+  );
+
   const [toolsOpen, setToolsOpen] = useState(false);
   const [confirming, setConfirming] = useState(false);
   const endRef = useRef<HTMLDivElement>(null);
+
   const {
     status,
     messages,
@@ -374,8 +366,9 @@ function App() {
     reset,
     approval,
     sessionId,
-    confirmExchange
+    confirmExchange,
   } = usePiSession(session);
+
   const runningTools = running_.map((tool) => tool.name);
 
   useEffect(() => {
@@ -387,13 +380,14 @@ function App() {
   /** While a run is going, Enter queues a follow-up and Steer joins the run. */
   const submit = (whenBusy: "followUp" | "steer" = "followUp") => {
     const text = prompt.trim();
+
     if (!text || !connected) return;
     setPrompt("");
-    submitPrompt(text, whenBusy);
+    void submitPrompt(text, whenBusy);
   };
 
   const newSession = async () => {
-    if (!await reset()) return;
+    if (!(await reset())) return;
     const next = crypto.randomUUID();
     localStorage.setItem(SESSION_KEY, next);
     setSession(next);
@@ -404,9 +398,7 @@ function App() {
   return (
     <div
       className={`grid h-dvh overflow-hidden bg-kumo-elevated text-kumo-default ${
-        toolsOpen
-          ? "lg:grid-cols-[minmax(520px,1fr)_minmax(300px,26vw)]"
-          : "grid-cols-1"
+        toolsOpen ? "lg:grid-cols-[minmax(520px,1fr)_minmax(300px,26vw)]" : "grid-cols-1"
       }`}
     >
       <section className="flex min-h-0 min-w-0 flex-col" aria-label="Chat">
@@ -425,15 +417,11 @@ function App() {
             </div>
             <div className="flex shrink-0 items-center gap-1.5">
               <Badge variant={connected ? "success" : "secondary"}>
-                {connected
-                  ? "Live"
-                  : status === "connecting"
-                    ? "Connecting"
-                    : "Reconnecting"}
+                {connected ? "Live" : status === "connecting" ? "Connecting" : "Reconnecting"}
               </Badge>
               <Button
                 variant="ghost"
-                shape="square"
+                {...ICON_BUTTON_PROPS}
                 aria-label="Tools"
                 aria-expanded={toolsOpen}
                 onClick={() => setToolsOpen((open) => !open)}
@@ -441,7 +429,7 @@ function App() {
               />
               <Button
                 variant="ghost"
-                shape="square"
+                {...ICON_BUTTON_PROPS}
                 aria-label="New session"
                 onClick={newSession}
                 icon={<PlusIcon size={16} />}
@@ -478,16 +466,10 @@ function App() {
             ) : null}
 
             {messages.map((message) => (
-              <Message
-                key={message.id}
-                message={message}
-                runningTools={runningTools}
-              />
+              <Message key={message.id} message={message} runningTools={runningTools} />
             ))}
 
-            {live ? (
-              <Message message={live} streaming runningTools={runningTools} />
-            ) : null}
+            {live ? <Message message={live} streaming runningTools={runningTools} /> : null}
 
             {running && !live ? (
               <div className="flex items-start gap-3">
@@ -515,13 +497,11 @@ function App() {
                 >
                   {tool.output}
                 </pre>
-              ) : null
+              ) : null,
             )}
 
             {queued > 0 ? (
-              <p className="ml-11 text-xs text-kumo-subtle">
-                {queued} queued behind this run
-              </p>
+              <p className="ml-11 text-xs text-kumo-subtle">{queued} queued behind this run</p>
             ) : null}
 
             {error ? (
@@ -536,16 +516,41 @@ function App() {
             {approval.sign_in_url ? (
               <div className="ml-11 space-y-3 rounded-xl border border-kumo-line bg-kumo-base p-4">
                 <p className="text-sm">Approve access to your Northstar account to continue.</p>
-                <a href={approval.sign_in_url} className="inline-flex items-center rounded-md bg-kumo-brand px-4 py-2 text-sm font-medium text-white hover:opacity-90">Sign in at Northstar</a>
-                <p className="text-xs text-kumo-subtle">A synthetic account for this demo. No password required.</p>
+                <a
+                  href={approval.sign_in_url}
+                  className="inline-flex items-center rounded-md bg-kumo-brand px-4 py-2 text-sm font-medium text-white hover:opacity-90"
+                >
+                  Sign in at Northstar
+                </a>
+                <p className="text-xs text-kumo-subtle">
+                  A synthetic account for this demo. No password required.
+                </p>
               </div>
             ) : null}
             {approval.exchange_proposed ? (
               <div className="ml-11 space-y-3 rounded-xl border border-kumo-line bg-kumo-base p-4">
                 <p className="text-sm font-medium">Exchange order #1042</p>
-                <p className="text-sm text-kumo-subtle">Stormline shell → insulated jacket, medium. $70 difference.</p>
-                <Button variant="primary" disabled={confirming || running} onClick={async () => { setConfirming(true); try { await confirmExchange(); } finally { setConfirming(false); } }}>Confirm demo exchange</Button>
-                <p className="text-xs text-kumo-subtle">Simulated exchange. No charge or shipment.</p>
+                <p className="text-sm text-kumo-subtle">
+                  Stormline shell → insulated jacket, medium. $70 difference.
+                </p>
+                <Button
+                  variant="primary"
+                  disabled={confirming || running}
+                  onClick={async () => {
+                    setConfirming(true);
+
+                    try {
+                      await confirmExchange();
+                    } finally {
+                      setConfirming(false);
+                    }
+                  }}
+                >
+                  Confirm demo exchange
+                </Button>
+                <p className="text-xs text-kumo-subtle">
+                  Simulated exchange. No charge or shipment.
+                </p>
               </div>
             ) : null}
             <div ref={endRef} />
@@ -571,9 +576,7 @@ function App() {
                   }
                 }}
                 placeholder={
-                  running
-                    ? "Queue a follow-up, or steer the running turn"
-                    : "Message Poppy"
+                  running ? "Queue a follow-up, or steer the running turn" : "Message Poppy"
                 }
                 aria-label="Message Poppy"
                 disabled={!connected}
@@ -595,7 +598,7 @@ function App() {
                   <Button
                     type="button"
                     variant="secondary"
-                    shape="square"
+                    {...ICON_BUTTON_PROPS}
                     aria-label="Stop"
                     onClick={abort}
                     icon={<StopIcon size={18} weight="fill" />}
@@ -605,7 +608,7 @@ function App() {
                 <Button
                   type="submit"
                   variant="primary"
-                  shape="square"
+                  {...ICON_BUTTON_PROPS}
                   aria-label="Send message"
                   disabled={!connected || prompt.trim() === ""}
                   icon={<PaperPlaneRightIcon size={18} />}
@@ -625,16 +628,18 @@ function App() {
       </section>
 
       {toolsOpen ? (
-        <Sidebar
-          tools={catalog}
-          activeTools={runningTools}
-          onClose={() => setToolsOpen(false)}
-        />
+        <Sidebar tools={catalog} activeTools={runningTools} onClose={() => setToolsOpen(false)} />
       ) : null}
     </div>
   );
 }
 
 const root = document.getElementById("root");
+
 if (!root) throw new Error("Missing #root element");
-createRoot(root).render(<App />);
+
+createRoot(root).render(
+  <StrictMode>
+    <App />
+  </StrictMode>,
+);

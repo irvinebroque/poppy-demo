@@ -1,15 +1,12 @@
 import type { AssistantMessage } from "@earendil-works/pi-ai";
-import type {
-  AgentEvent,
-  EntryRecord,
-  MessageChange
-} from "@earendil-works/pi-durable";
+import type { AgentEvent, EntryRecord, MessageChange } from "@earendil-works/pi-durable";
 import {
+  assistantParts,
   projectEntries,
   projectEntry,
   projectMessage,
   type PiMessage,
-  type PiMessagePart
+  type PiMessagePart,
 } from "./transcript";
 
 /** A tool call running now, with its streamed output. */
@@ -21,7 +18,7 @@ export type PiRunningTool = {
 
 /**
  * Everything a UI shows for one session, derived from pi's agent events by
- * `reduceView` on either side of the wire.
+ * `reduceView` before the display snapshot crosses the wire.
  */
 export type PiSessionView = {
   readonly messages: readonly PiMessage[];
@@ -41,9 +38,9 @@ export type PiSessionView = {
 };
 
 /**
- * Folds pi's agent events into what a UI shows. Pure, so the browser and
- * the tests run the same code: pi's events are the wire format, and this is
- * the only place that interprets them. App glue, not part of the harness.
+ * Folds pi's agent events into what the UI shows. The server and tests use
+ * this pure reducer; the browser validates the resulting display snapshot.
+ * App glue, not part of the harness.
  */
 export const EMPTY_VIEW: PiSessionView = {
   messages: [],
@@ -53,57 +50,43 @@ export const EMPTY_VIEW: PiSessionView = {
   queued: 0,
   retry: null,
   model: null,
-  error: null
+  error: null,
 };
 
 const LIVE_ID = "live";
 
 function append(view: PiSessionView, entry: EntryRecord): PiSessionView {
   const message = projectEntry(entry);
+
   if (!message) return view;
+
   // A reset starts a new context; the snapshot shows only the active one.
   if (entry.kind === "pi.reset") return { ...view, messages: [message] };
+
   if (view.messages.some((known) => known.id === message.id)) return view;
+
   return { ...view, messages: [...view.messages, message] };
 }
 
 function blockPart(block: AssistantMessage["content"][number]): PiMessagePart {
-  const [part] = projectMessage(
-    {
-      role: "assistant",
-      content: [block],
-      api: "",
-      provider: "",
-      model: "",
-      usage: {
-        input: 0,
-        output: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-        totalTokens: 0,
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 }
-      },
-      stopReason: "stop",
-      timestamp: 0
-    } as AssistantMessage,
-    LIVE_ID
-  ).parts;
+  const [part] = assistantParts([block]);
+
   return part;
 }
 
-function applyChanges(
-  live: PiMessage | null,
-  changes: readonly MessageChange[]
-): PiMessage | null {
+function applyChanges(live: PiMessage | null, changes: readonly MessageChange[]): PiMessage | null {
   let message = live;
+
   for (const change of changes) {
     if (change.type === "message") {
       message = projectMessage(change.message, LIVE_ID);
       continue;
     }
+
     if (!message) continue;
     const parts = [...message.parts];
     const previous = parts[change.contentIndex];
+
     switch (change.type) {
       case "text_start":
       case "thinking_start":
@@ -114,49 +97,47 @@ function applyChanges(
       case "text_delta":
         parts[change.contentIndex] = {
           type: "text",
-          text: (previous?.type === "text" ? previous.text : "") + change.delta
+          text: (previous?.type === "text" ? previous.text : "") + change.delta,
         };
         break;
       case "thinking_delta":
         parts[change.contentIndex] = {
           type: "thinking",
-          text:
-            (previous?.type === "thinking" ? previous.text : "") + change.delta
+          text: (previous?.type === "thinking" ? previous.text : "") + change.delta,
         };
         break;
       case "toolcall_delta":
         // Partial argument JSON; the call renders once its block completes.
         break;
     }
+
     message = { ...message, parts };
   }
+
   return message;
 }
 
-export function reduceView(
-  view: PiSessionView,
-  event: AgentEvent
-): PiSessionView {
+export function reduceView(view: PiSessionView, event: AgentEvent): PiSessionView {
   switch (event.type) {
     case "snapshot": {
       const partial = event.generation?.message;
+
       return {
         messages: projectEntries(event.entries),
         live: partial ? projectMessage(partial, LIVE_ID) : null,
         running: event.run !== undefined,
-        tools: event.tools
-          .filter((slot) => slot.status === "running")
-          .map((slot) => ({
-            callId: slot.callId,
-            name: slot.name,
-            output: slot.output ?? ""
-          })),
+        tools: event.tools.flatMap((slot) =>
+          slot.status === "running"
+            ? [{ callId: slot.callId, name: slot.name, output: slot.output ?? "" }]
+            : [],
+        ),
         queued: event.inbox.length,
         retry: event.generation?.retry ?? null,
         model: event.agent.model ?? null,
-        error: null
+        error: null,
       };
     }
+
     case "run_start":
       return { ...view, running: true, error: null };
     case "run_end":
@@ -169,10 +150,10 @@ export function reduceView(
       return { ...view, live: applyChanges(view.live, event.changes) };
     case "message_end": {
       const next = append(view, event.entry);
-      return event.entry.model?.[0]?.role === "assistant"
-        ? { ...next, live: null }
-        : next;
+
+      return event.entry.model?.[0]?.role === "assistant" ? { ...next, live: null } : next;
     }
+
     case "entry_appended":
       return append(view, event.entry);
     case "tool_execution_start":
@@ -180,29 +161,33 @@ export function reduceView(
         ...view,
         tools: [
           ...view.tools.filter((tool) => tool.callId !== event.toolCallId),
-          { callId: event.toolCallId, name: event.toolName, output: "" }
-        ]
+          { callId: event.toolCallId, name: event.toolName, output: "" },
+        ],
       };
     case "tool_execution_update": {
       const output = event.output;
+
       if (!output) return view;
+
       return {
         ...view,
         tools: view.tools.map((tool) => {
           if (tool.callId !== event.toolCallId) return tool;
+
           if ("set" in output) return { ...tool, output: output.set };
+
           return {
             ...tool,
-            output:
-              tool.output.slice(output.trimStart ?? 0) + (output.append ?? "")
+            output: tool.output.slice(output.trimStart ?? 0) + (output.append ?? ""),
           };
-        })
+        }),
       };
     }
+
     case "tool_execution_end":
       return {
         ...view,
-        tools: view.tools.filter((tool) => tool.callId !== event.toolCallId)
+        tools: view.tools.filter((tool) => tool.callId !== event.toolCallId),
       };
     case "inbox_update":
       return { ...view, queued: event.items.length };
@@ -225,9 +210,6 @@ export function reduceView(
   }
 }
 
-export function reduceEvents(
-  view: PiSessionView,
-  events: readonly AgentEvent[]
-): PiSessionView {
+export function reduceEvents(view: PiSessionView, events: readonly AgentEvent[]): PiSessionView {
   return events.reduce(reduceView, view);
 }
