@@ -4,6 +4,7 @@ export const PROTOCOL_VERSION = '0.4';
 export const validId = (value: unknown): value is string => typeof value === 'string' && /^[A-Za-z0-9_-]{1,256}$/.test(value);
 export const CLIENT_ASSERTION = 'urn:ietf:params:oauth:client-assertion-type:jwt-bearer';
 export const SCOPES = ['orders:read', 'orders:write'];
+const REQUEST_JWT_WINDOW = 60;
 export const now = () => Math.floor(Date.now() / 1000);
 export const id = (prefix = '') => prefix + crypto.randomUUID().replaceAll('-', '');
 export function randomSecret() { return b64(crypto.getRandomValues(new Uint8Array(32))); }
@@ -84,8 +85,8 @@ export async function verifyProof(request: Request, token?: string) {
     const header = decodeProtectedHeader(jwt);
     if (header.typ !== 'dpop+jwt' || header.alg !== 'ES256' || !header.jwk || ('d' in header.jwk) || header.jwk.kty !== 'EC' || header.jwk.crv !== 'P-256') fail('invalid_dpop_proof');
     const { payload } = await jwtVerify(jwt, await importJWK(header.jwk, 'ES256'), { algorithms: ['ES256'], requiredClaims: ['jti', 'iat'] });
-    if (payload.htm !== request.method || payload.htu !== target(request.url) || typeof payload.iat !== 'number' || Math.abs(now() - payload.iat) > 60 || typeof payload.jti !== 'string' || !payload.jti || (token && payload.ath !== await hash(token)) || (!token && payload.ath !== undefined)) fail('invalid_dpop_proof');
-    return { thumbprint: await calculateJwkThumbprint(header.jwk), jti: payload.jti };
+    if (payload.htm !== request.method || payload.htu !== target(request.url) || typeof payload.iat !== 'number' || Math.abs(now() - payload.iat) > REQUEST_JWT_WINDOW || typeof payload.jti !== 'string' || !payload.jti || (token && payload.ath !== await hash(token)) || (!token && payload.ath !== undefined)) fail('invalid_dpop_proof');
+    return { thumbprint: await calculateJwkThumbprint(header.jwk), jti: payload.jti, replayExpiresAt: Math.ceil(payload.iat + REQUEST_JWT_WINDOW) };
   } catch { fail('invalid_dpop_proof', token ? 401 : 400); }
 }
 export function cookie(request: Request, name: string) {
@@ -123,7 +124,7 @@ export async function verifySession(request: Request, keys: JWK[], client: strin
     const publicKey = (dlg.cnf as { jwk?: JWK })?.jwk;
     if (!publicKey || publicKey.d || publicKey.kty !== 'EC' || publicKey.crv !== 'P-256' || header.kid !== await calculateJwkThumbprint(publicKey)) fail('invalid_session');
     const { payload: p } = await jwtVerify(jwt, await importJWK(publicKey, 'ES256'), { algorithms: ['ES256'], issuer: client, audience, requiredClaims: ['sid', 'sub', 'htm', 'htu', 'iat', 'jti'] });
-    if (p.aud !== audience || !validId(p.sid) || typeof p.sub !== 'string' || !p.sub || (p.agent_id !== undefined && (typeof p.agent_id !== 'string' || !p.agent_id)) || p.htm !== request.method || p.htu !== target(request.url) || typeof p.iat !== 'number' || Math.abs(now() - p.iat) > 60 || typeof p.jti !== 'string' || !p.jti || (token ? p.ath !== await hash(token) : p.ath !== undefined)) fail('invalid_session');
-    return { user: p.sub, session: p.sid, jti: p.jti, agent: p.agent_id as string | undefined };
+    if (p.aud !== audience || !validId(p.sid) || typeof p.sub !== 'string' || !p.sub || (p.agent_id !== undefined && (typeof p.agent_id !== 'string' || !p.agent_id)) || p.htm !== request.method || p.htu !== target(request.url) || typeof p.iat !== 'number' || Math.abs(now() - p.iat) > REQUEST_JWT_WINDOW || typeof p.jti !== 'string' || !p.jti || (token ? p.ath !== await hash(token) : p.ath !== undefined)) fail('invalid_session');
+    return { user: p.sub, session: p.sid, jti: p.jti, agent: p.agent_id as string | undefined, replayExpiresAt: Math.ceil(p.iat + REQUEST_JWT_WINDOW) };
   } catch { fail('invalid_session'); }
 }

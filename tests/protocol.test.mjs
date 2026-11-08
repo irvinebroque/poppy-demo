@@ -142,6 +142,20 @@ test('DPoP and Session ath bind signed-in requests; wrong proof method/key/hash 
   await error(await request(path, { session: s, proof: await dpop('GET', path, 'wrong') }), 401, 'invalid_dpop_proof');
   await error(await request(path, { session: s, headers: { Authorization: 'Bearer ' + s.access_token } }), 401, 'invalid_token');
 });
+test('future-dated Session and DPoP proofs remain blocked after the former 65-second cache lifetime', { timeout: 120000 }, async () => {
+  const s = start(), path = '/poppy/conversations';
+  const jwt = await sessionProof(s, 'POST', path, undefined, { iat: now() + 59 });
+  assert.equal((await request(path, { method: 'POST', session: s, sessionJwt: jwt, body: message() })).status, 201);
+  await error(await request(path, { method: 'POST', session: s, sessionJwt: jwt, body: message() }), 400, 'invalid_session');
+  const approved = await consent(start());
+  const proof = await dpop('GET', '/api/orders', approved.access_token, dpopKeys, { iat: now() + 59 });
+  assert.equal((await request('/api/orders', { session: approved, proof })).status, 200);
+  await error(await request('/api/orders', { session: approved, proof }), 401, 'invalid_dpop_proof');
+  // Real workerd time: the proofs are still fresh after the old cache entries would expire.
+  await new Promise(resolve => setTimeout(resolve, 67000));
+  await error(await request(path, { method: 'POST', session: s, sessionJwt: jwt, body: message() }), 400, 'invalid_session');
+  await error(await request('/api/orders', { session: approved, proof }), 401, 'invalid_dpop_proof');
+});
 test('scopes, resource audiences, refresh across Sessions, and immediate revocation', async () => {
   const s = await consent(start());
   const narrow = await token({ grant_type: 'refresh_token', refresh_token: s.refresh_token, scope: 'orders:read' }); assert.equal(narrow.status, 200); const n = { ...s, ...await narrow.json() };

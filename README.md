@@ -59,7 +59,7 @@ npx cf auth login
 npm run dev
 ```
 
-Caller: http://localhost:8787 · Receiver: http://localhost:8788. Local development uses the real remote Workers AI binding; inference can incur usage. For protocol-only testing, run `npm test`; it uses isolated local workerd instances and needs no Cloudflare login. Local HTTP is explicitly restricted to localhost/127.0.0.1 and is disabled on deployment.
+Caller: http://localhost:8787 · Receiver: http://localhost:8788. Local development uses the real remote Workers AI binding; inference can incur usage. For protocol-only testing, run `npm test`; it uses isolated local workerd instances and needs no Cloudflare login. The replay regression waits 67 seconds to check cache expiry with real workerd time. Local HTTP is explicitly restricted to localhost/127.0.0.1 and is disabled on deployment.
 
 ```sh
 npm run types

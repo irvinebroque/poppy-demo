@@ -126,22 +126,31 @@ export class CallerSession extends Agent<CallerEnv> {
     const client = this.env.CALLER_ORIGIN + '/agent.json';
     return { client_id: client, client_assertion_type: CLIENT_ASSERTION, client_assertion: await this.env.IDENTITY.getByName('signing-key').assertion(claims(client, client, this.env.RECEIVER_ORIGIN)) };
   }
-  private async tokenRequest(s: PrivateState, params: Record<string,string>, note: string) {
+  private async tokenRequest(s: PrivateState, params: Record<string,string>, note: string, requestedScope?: string) {
     if (!s.metadata) fail('discover_first');
+    const isRefresh = params.grant_type === 'refresh_token';
+    const expectedScope = requestedScope ?? params.scope ?? (isRefresh ? s.accountScope : undefined);
     const endpoint = s.metadata.token_endpoint; const fields = await this.authFields();
     const body = new URLSearchParams({ ...params, ...fields });
     let nonce: string | undefined;
     for (let i = 0; i < 2; i++) {
       const response = await this.env.RECEIVER.fetch(endpoint, { method: 'POST', redirect: 'manual', headers: { 'Content-Type': 'application/x-www-form-urlencoded', DPoP: await proof(s.dpop, 'POST', endpoint, undefined, nonce) }, body: body.toString() });
-      const result = JSON.parse(await readText(response)) as TokenResponse & { error?: string };
+      const result = JSON.parse(await readText(response)) as Omit<TokenResponse, 'scope'> & { scope?: string; error?: string };
       this.trace(s, 'POST', endpoint, response.status, note, result);
       if (result.error === 'use_dpop_nonce' && response.headers.get('DPoP-Nonce')) { nonce = response.headers.get('DPoP-Nonce')!; Object.assign(fields, await this.authFields()); for (const [k,v] of Object.entries(fields)) body.set(k,v); continue; }
-      if (!response.ok) { if (result.error === 'invalid_grant') this.disconnect(s); fail(result.error ?? 'token_request_failed', response.status); }
+      if (!response.ok) { if (isRefresh && result.error === 'invalid_grant') this.disconnect(s); fail(result.error ?? 'token_request_failed', response.status); }
       if (result.token_type !== 'DPoP' || !result.access_token || !(result.expires_in > 0)) fail('invalid_token_response');
-      if (!result.scope || result.scope.split(' ').some(scope => !SCOPES.includes(scope))) fail('invalid_token_response');
-      if (params.resource?.endsWith('/poppy/conversations')) { s.conversationToken = result; s.conversationTokenExpires = now() + result.expires_in; }
-      else { s.token = result; s.tokenExpires = now() + result.expires_in; }
-      if (result.refresh_token) { s.accountToken = result.refresh_token; s.accountScope = result.scope; }
+      // OAuth omits scope only when the grant exactly matches the request.
+      const scope = result.scope === undefined ? expectedScope : result.scope;
+      if (typeof scope !== 'string' || !scope || scope.split(' ').some(value => !SCOPES.includes(value))) fail('invalid_token_response');
+      const token: TokenResponse = { ...result, scope };
+      if (params.resource?.endsWith('/poppy/conversations')) { s.conversationToken = token; s.conversationTokenExpires = now() + result.expires_in; }
+      else { s.token = token; s.tokenExpires = now() + result.expires_in; }
+      if (result.refresh_token) {
+        s.accountToken = result.refresh_token;
+        // A rotated refresh token keeps its original grant, even if this access token is narrowed.
+        if (!isRefresh || !s.accountScope) s.accountScope = scope;
+      }
       this.save(s); return;
     } fail('use_dpop_nonce');
   }
@@ -283,7 +292,7 @@ export class CallerSession extends Agent<CallerEnv> {
       if(params.error)fail(params.error);
       if(!params.code||!s.session)fail('invalid_oauth_response');
       const old=s.accountToken;
-      await this.tokenRequest(s,{grant_type:'authorization_code',code:params.code,code_verifier:pending.verifier,redirect_uri:this.env.CALLER_ORIGIN+'/oauth/callback'},'Direct sign-in: validate state + issuer, exchange one-time code with PKCE');
+      await this.tokenRequest(s,{grant_type:'authorization_code',code:params.code,code_verifier:pending.verifier,redirect_uri:this.env.CALLER_ORIGIN+'/oauth/callback'},'Direct sign-in: validate state + issuer, exchange one-time code with PKCE',new URL(pending.url).searchParams.get('scope') ?? undefined);
       delete s.conversationToken; delete s.conversationTokenExpires; this.save(s);
       if(old&&old!==s.accountToken&&s.metadata){const endpoint=s.metadata.revocation_endpoint;const r=await this.env.RECEIVER.fetch(endpoint,{method:'POST',redirect:'manual',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams({token:old,token_type_hint:'refresh_token',...await this.authFields()})});await r.body?.cancel();}
       return this.publicState(s);

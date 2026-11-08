@@ -33,7 +33,7 @@ async function authenticateClient(env: ReceiverEnv, p: URLSearchParams, audience
 }
 async function checkProof(env: ReceiverEnv, request: Request, token?: string) {
   const p = await verifyProof(request, token);
-  if (!await guard(env, 'dpop:' + p.thumbprint).accept(p.jti, now() + 65)) fail('invalid_dpop_proof', token ? 401 : 400);
+  if (!await guard(env, 'dpop:' + p.thumbprint).accept(p.jti, p.replayExpiresAt)) fail('invalid_dpop_proof', token ? 401 : 400);
   return p.thumbprint;
 }
 function ownerFromToken(env: ReceiverEnv, token: string) {
@@ -141,7 +141,7 @@ async function handle(request: Request, env: ReceiverEnv): Promise<Response> {
   let keys: JWK[];
   try { keys = (await client(env, clientId(env))).keys; } catch { fail('invalid_session'); }
   const session = await verifySession(request, keys, clientId(env), origin, token);
-  if (!await guard(env, 'sessions:' + clientId(env)).accept(session.jti, now() + 65)) fail('invalid_session');
+  if (!await guard(env, 'sessions:' + clientId(env)).accept(session.jti, session.replayExpiresAt)) fail('invalid_session');
   const input: Input = { client: clientId(env), user: session.user, session: session.session, agent: session.agent, resource: path.startsWith('/api/') ? origin : origin + '/poppy/conversations' };
   if (header) {
     if (!token) fail('invalid_token', 401);
