@@ -45,32 +45,56 @@ The caller supplies a hosted Client ID Metadata Document and JWKS. The receiver 
 
 Draft 0.4 is the current **in-progress draft**, not a frozen release. This implementation was checked against [upstream commit `a2ca25a`](https://github.com/personal-agent-protocol/personal-agent-protocol/tree/a2ca25ab43eccc045bc7f2b86d3b579088da9af1/content/versions/0.4) on November 8, 2026. It serves only 0.4, selects a same-origin 0.4 document if a peer advertises it in `supported_versions`, and rejects incompatible versions. Existing 0.1 token grants and conversation state cannot be reused: visitors keep their pairwise User ID but must approve account access again after upgrading.
 
-The receiver's company replies are deterministic fixtures. It has no staffed human support desk; handoff truthfully returns to its agent. It uses JSON event responses rather than an SSE stream. Optional extensions (including Operations and Mediated Sign-In), device authorization, MCP, and browser-session join are not advertised or implemented. This is a focused interoperability demo, not a complete protocol conformance suite.
+The receiver's company replies are deterministic fixtures. It has no staffed human support desk; handoff truthfully returns to its agent. It uses JSON event responses rather than an SSE stream. Operations, Mediated Sign-In, device authorization, MCP, and browser-session join are not advertised or implemented. MOLE is optional, as described below. This is a focused interoperability demo, not a complete protocol conformance suite.
 
 This demo implements its OAuth, Session, and conversation layers directly using `jose` and Durable Objects.
 
-## Optional MOLE private search
+## Optional MOLE access
 
-This adds a separate, read-only private search path around the existing Poppy 0.4 implementation. The public checkout runs the original Poppy demo; enabling MOLE requires access to the pinned internal Guac prototype. It is not a Poppy extension or a change to Poppy's wire format.
+This implements the [MOLE extension version 1](https://github.com/irvinebroque/personal-agent-protocol/blob/proposal/mole-private-access/content/versions/0.4/extensions/mole.mdx) alongside the existing Poppy 0.4 Sessions and OAuth account access. An agent can choose MOLE, an existing Session, or a new anonymous browsing ID. It needs no shortlist approval to start a Session or share task information. Account access keeps the existing OAuth approvals and scopes.
+
+The public checkout runs ordinary Poppy without MOLE. Real MOLE requires access to the pinned internal Guac implementation:
 
 ```sh
 # Requires internal GitLab SSH access, Rust, wasm-pack and Python 3.10+.
-# The helper can install its pinned Emscripten SDK.
 vp run build:guac
+vp exec playwright install chromium
 vp run test:mole
 vp run dev
 ```
 
-1. In **Browse privately. Remember by choice.**, search for a warmer jacket. The caller's durable Guac wallet obtains 24 credits from the demo Anchor/Moderator flow and spends one credit per search. Private browsing creates no Poppy User ID or Session.
-2. Select **Lose the next search response**, then search. **Recover search** resends the saved request within 60 seconds and retrieves the recorded result and credential update without another execution or debit. The continuation survives a caller isolate restart.
-3. Check the products to share and select **Save shortlist with Poppy**. This explicit approval starts Poppy continuity and sends only those product facts in a human-authored 0.4 message. Repeating the save uses the same request ID. The model cannot approve sharing. The query, wallet, proof, eligibility ID and credit balance stay out of that message.
-4. Continue with the existing account sign-in and simulated exchange flow. Account access still requires separate OAuth approval. Existing Poppy or account credentials never accompany private search.
+In **Choose how your agent accesses Northstar**, open **Anchor account access** and enter the provisioned invitation. Local development has one account with invitation `northstar-demo-member`. Search spends one of its 24 credits. The Anchor allows one endorsement per registered account per day, independent of visitor cookies and Poppy identifiers. Clearing a cookie or opening a new browser does not create another eligible account. Outside local development, configure the receiver's `MOLE_ANCHOR_ACCOUNTS` secret as a JSON array of `{ "account": "member-id", "token": "a-random-invitation-of-at-least-16-characters" }`. Issue invitations privately; the model never receives them.
 
-The browser panel and Pi's `private_search` / `recover_private_search` actions share one wallet per caller visitor. The six private routes use a restricted service-binding transport with fresh headers. A separate `MoleAnchor` Durable Object grants one synthetic endorsement per wallet per day; `MoleModerator` verifies real Guac proofs and atomically records the result, nullifier, recovery record and execution count. A spent-out wallet is not silently refilled, including after starting a new chat.
+**Use Poppy Session** and **Use new anonymous ID** work before or after private search. Pi can also choose `start_session` or `anonymous_session`, and can send search results with `company_message`. **Save shortlist with Poppy** remains an optional convenience for sending selected products. MOLE requests keep omitting Session, account, cookie, and DPoP state even when an ordinary Session exists.
 
-`vp install --frozen-lockfile` does not fetch internal source. Without built Guac artifacts, the panel is hidden, private endpoints return 503, and the real-crypto suite is explicitly skipped. `vp run test:mole` fails if Guac is absent. No disabled adapter can issue a credential or validate a proof. The internal source and generated Wasm stay ignored; see [dependency provenance and build requirements](vendor/guac/UPSTREAM.md).
+**Lose the next search response** and **Recover search** demonstrate durable credential state and exact-request recovery within 60 seconds without another execution or debit. Starting a new chat preserves the wallet and remaining allowance. Exhaustion, a missing eligible Anchor, or access refusal stops the private operation; choosing another access mode is a separate agent action under its policy and the user's instructions.
 
-This is a single-operator prototype with synthetic eligibility, fixed keys and no bounded replay-store cleanup. Resetting the visitor cookie creates another wallet. It demonstrates credential unlinkability at the protocol layer, not network anonymity: queries, logs, timing and infrastructure can correlate activity. It adds neither native-browser credentials nor browser credential injection.
+### Discovery and providers
+
+With real crypto enabled, `poppy.json` advertises `extensions.mole` version `1` and `moderator_config_uri`, without a resource allowlist. The first API search requests content without identity before discovery. After a MOLE challenge, the caller verifies the Company's discovery document, configuration, Anchor key and epoch before obtaining and presenting a credential. Unknown versions do not establish support. The old `/mole/endpoints` endpoint is gone.
+
+The caller uses the advertised configuration URL, the Moderator's `issuance-uri`, and its configured Anchor's `grant-uri`. It does not infer those URLs from resource challenges. Configuration fetches reject redirects and identifying URL components. Public discovery and all private exchanges use fresh headers; only Anchor requests carry Anchor account authentication.
+
+You can use a hosted provider by setting `POPPY_MOLE_MODERATOR_CONFIG_URI` and `POPPY_MOLE_PROVIDER_ORIGIN` on the receiver and caller. Configure `POPPY_MOLE_ANCHOR_CONFIG_URI` on the caller for an existing Anchor service. `POPPY_MOLE_PROVIDER_NAME` optionally uses a Worker service binding instead of public HTTPS. The demo deliberately restricts destinations to its configured Company and provider origins; it is not an arbitrary-site crawler. Trusted client configuration can supply the Moderator URL when the Company does not advertise MOLE. No usable Anchor match means stop or choose ordinary Poppy access, without automatic enrollment or a central registry.
+
+### Isolated browser demo
+
+```sh
+# In another terminal, with vp run dev running:
+POPPY_ANCHOR_INVITE=northstar-demo-member vp run browse:private
+```
+
+To reuse the web panel’s wallet, click **Copy private browser command** and run that command within 60 seconds instead. The one-use link stays outside model tools and transcripts. This avoids asking the same Anchor account for a second grant.
+
+This opens a new Chromium context at `/private/catalog`. The page, `/private/catalog.css`, and `/private/jacket.svg` each require MOLE and spend one credit. Chromium's Fetch interception handles navigations, redirects and assets through the caller's durable wallet. Every browser network request starts without identifying state; credential proofs and updates remain in the runtime. The context runs offline so an unhandled request cannot reach the network directly. It blocks service workers, page JavaScript, downloads, writes and requests to other origins. This is a read-only browser integration, not a page JavaScript wallet or a shipping browser API.
+
+The launcher keeps its caller visitor cookie in ignored `.private-browser.json` with owner-only permissions, so closing and reopening the isolated context reuses the wallet. No destination cookies, storage, Poppy joins or account state enter the new context. An ordinary browser context remains separate. `/private/redirect` exercises a same-origin redirect; `/private/account` refuses Session-free access; ordinary public product pages remain readable without MOLE. The integration respects `web.disabled` and never signs in or joins the private context automatically. If an asset response loses its credential update, the next browser request resumes the saved GET before spending again, including after a caller restart.
+
+### Validation and limits
+
+`vp run test:mole` exercises real cryptography, durable recovery, independent visitors, account isolation, optional Sessions and sharing, cookie-reset resistance, hosted configuration, missing Anchor matches, unadvertised negotiation, configuration refusal and real Chromium pages/assets/redirects. API-only implementations need no browser integration; the optional browser launcher requires the Chromium installation above. `vp install --frozen-lockfile` never fetches internal source; without crypto, MOLE is unavailable and its integration tests explicitly skip. Disabled adapters cannot issue or accept proofs.
+
+The default Anchor, Moderator, caller and Company share one operator and one accepted Anchor key. They publish a common configuration rather than per-user Anchor sets. Logs, timing, queries and infrastructure can correlate activity. The account policy limits grants; it does not prove humanity or unique personhood. Durable keys and replay records have no automatic key rotation or bounded cleanup in this demo. Production deployments need a key lifecycle and retention policy before retiring replay state. The tests establish compatibility between this implementation's components, not interoperability with an independent MOLE implementation. The demo uses revision 01's EC-IHAT (`0x0002`) and EC-ACT (`0x0001`) flows and HTTP fields; its `METHOD URL` operation binding is application-specific, not an additional Poppy canonicalization rule. See [dependency provenance](vendor/guac/UPSTREAM.md).
 
 ## Develop
 

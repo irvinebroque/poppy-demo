@@ -17,6 +17,9 @@ export default defineConfig({
       ReplayGuard: exports.durableObject({ storage: "sqlite" }),
     },
     env: {
+      MOLE_MODERATOR_CONFIG_URI: bindings.text(process.env.POPPY_MOLE_MODERATOR_CONFIG_URI ?? ""),
+      MOLE_PROVIDER_ORIGIN: bindings.text(process.env.POPPY_MOLE_PROVIDER_ORIGIN ?? ""),
+      MOLE_ANCHOR_ACCOUNTS: bindings.secret(),
       CALLER_ORIGIN: bindings.text(process.env.POPPY_CALLER_ORIGIN ?? "http://localhost:8787"),
       RECEIVER_ORIGIN: bindings.text(process.env.POPPY_RECEIVER_ORIGIN ?? "http://localhost:8788"),
       LOCAL_DEMO: bindings.text(process.env.POPPY_LOCAL_DEMO ?? "true"),

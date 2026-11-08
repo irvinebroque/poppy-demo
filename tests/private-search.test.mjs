@@ -2,6 +2,8 @@ import { test, beforeAll, afterAll, describe } from "vite-plus/test";
 import assert from "node:assert/strict";
 import { Miniflare } from "miniflare";
 import { guacAvailable } from "../scripts/prepare-guac.mjs";
+import { chromium } from "playwright";
+import { privateContext } from "../scripts/browser/private-context.ts";
 import { buildWorkerManifest } from "./build-worker.mjs";
 
 describe("real Guac MOLE integration", { skip: !(await guacAvailable()) }, () => {
@@ -13,6 +15,12 @@ describe("real Guac MOLE integration", { skip: !(await guacAvailable()) }, () =>
   const durable = { type: "durable-object", storage: "sqlite" };
   let mf, agent, receiver, options;
   let cookie;
+  let nextAccount = 0;
+
+  const accounts = Array.from({ length: 20 }, (_, i) => ({
+    account: `member-${i}`,
+    token: `test-invitation-member-${i}`,
+  }));
 
   async function api(path, body) {
     const headers = new Headers();
@@ -30,8 +38,11 @@ describe("real Guac MOLE integration", { skip: !(await guacAvailable()) }, () =>
       body: body ? JSON.stringify(body) : undefined,
     });
 
-    if (response.headers.has("Set-Cookie"))
+    if (response.headers.has("Set-Cookie")) {
       cookie = response.headers.get("Set-Cookie").split(";")[0];
+      const signedIn = await action("anchor-access", { invite: accounts[nextAccount++].token });
+      assert.equal(signedIn.status, 200);
+    }
 
     return { status: response.status, body: await response.json() };
   }
@@ -97,6 +108,7 @@ describe("real Guac MOLE integration", { skip: !(await guacAvailable()) }, () =>
               CALLER: { type: "worker", worker: "caller" },
               OWNERS: object("receiver", "CompanyUser"),
               GUARDS: object("receiver", "ReplayGuard"),
+              MOLE_ANCHOR_ACCOUNTS: text(JSON.stringify(accounts)),
               MOLE_ANCHOR: object("receiver", "MoleAnchor"),
               MOLE_MODERATOR: object("receiver", "MoleModerator"),
             },
@@ -127,7 +139,7 @@ describe("real Guac MOLE integration", { skip: !(await guacAvailable()) }, () =>
     await mf?.dispose();
   });
 
-  test("private search, durable lost-response recovery, consent boundary and account isolation", async () => {
+  test("private search, durable recovery, optional Sessions and account isolation", async () => {
     const initial = await api("/api/state");
     assert.equal(initial.status, 200);
     assert.equal(initial.body.user_id, undefined);
@@ -162,11 +174,8 @@ describe("real Guac MOLE integration", { skip: !(await guacAvailable()) }, () =>
     const regrant = await receiver.fetch(store + "/__test/regrant");
     assert.equal(regrant.status, 429);
     assert.equal((await regrant.json()).error, "anchor_allowance_used");
-    assert.equal((await action("start")).body.error, "use_shortlist_approval");
-    assert.equal(
-      (await action("message", { text: "Please remember my search" })).body.error,
-      "use_shortlist_approval",
-    );
+    assert.equal((await action("discover")).status, 200);
+    assert.equal((await action("start")).status, 200);
     const lost = await action("private-search", { text: "waterproof jacket", lose_response: true });
     assert.equal(lost.status, 200, JSON.stringify(lost.body));
     assert.equal(lost.body.private_access.pending, true);
@@ -273,14 +282,7 @@ describe("real Guac MOLE integration", { skip: !(await guacAvailable()) }, () =>
   });
 
   test("private endpoints reject Poppy identity, canonicalize requests, and never authorize orders", async () => {
-    for (const header of [
-      "Cookie",
-      "DPoP",
-      "Poppy-User-ID",
-      "Poppy-Session",
-      "Poppy-Version",
-      "Session",
-    ]) {
+    for (const header of ["Cookie", "DPoP", "Poppy-User-ID", "Poppy-Session", "Session"]) {
       const r = await receiver.fetch(store + "/private/search?q=warm", {
         method: "POST",
         headers: { [header]: "secret" },
@@ -289,6 +291,18 @@ describe("real Guac MOLE integration", { skip: !(await guacAvailable()) }, () =>
       assert.equal(r.status, 400);
       assert.equal((await r.json()).error, "private_request_contains_identity");
     }
+
+    const declared = await receiver.fetch(store + "/private/search?q=warm", {
+      method: "POST",
+      headers: { "Poppy-Version": "0.4", "Poppy-Extensions": '"mole";v="1"' },
+    });
+
+    assert.equal(declared.status, 401, await declared.clone().text());
+    assert.match(declared.headers.get("WWW-Authenticate"), /^Mole /);
+    const preflight = await receiver.fetch(store + "/private/search", { method: "OPTIONS" });
+    assert.equal(preflight.status, 204);
+    assert.equal(preflight.headers.get("Access-Control-Allow-Origin"), "*");
+    assert.match(preflight.headers.get("Access-Control-Expose-Headers"), /Mole-Credential/);
 
     assert.equal(
       (await receiver.fetch(store + "/private/search?q=warm&q=cold", { method: "POST" })).status,
@@ -323,6 +337,14 @@ describe("real Guac MOLE integration", { skip: !(await guacAvailable()) }, () =>
 
     const replies = await Promise.all(
       visitors.map(async (visitor, i) => {
+        const provisioned = await agent.fetch(caller + "/api/action", {
+          method: "POST",
+          headers: { Cookie: visitor, Origin: caller, "Content-Type": "application/json" },
+          body: JSON.stringify({ action: "anchor-access", invite: accounts[nextAccount++].token }),
+        });
+
+        assert.equal(provisioned.status, 200);
+
         const r = await agent.fetch(caller + "/api/action", {
           method: "POST",
           headers: { Cookie: visitor, Origin: caller, "Content-Type": "application/json" },
@@ -425,5 +447,194 @@ describe("real Guac MOLE integration", { skip: !(await guacAvailable()) }, () =>
     } finally {
       cookie = oldCookie;
     }
+  });
+  test("agents can share results and choose fresh anonymous Sessions without shortlist approval", async () => {
+    cookie = undefined;
+    await api("/api/state");
+    const searched = await action("private-search", { text: "warmer jacket" });
+    assert.equal(searched.status, 200);
+    const started = await action("start");
+    assert.equal(started.status, 200);
+
+    const message = await action("message", {
+      text: "Compare the Stormline Insulated Jacket from my search",
+      sender: "agent",
+    });
+
+    assert.equal(message.status, 200, JSON.stringify(message.body));
+    const anonymous = await action("anonymous-session");
+    assert.equal(anonymous.status, 200);
+    assert.notEqual(anonymous.body.user_id, started.body.user_id);
+    assert.notEqual(anonymous.body.session_id, started.body.session_id);
+    assert.equal(anonymous.body.private_access.balance, 23);
+  });
+
+  test("clearing visitor state cannot remint an Anchor account's allowance", async () => {
+    cookie = undefined;
+    await api("/api/state");
+    await action("anchor-access", { invite: accounts[0].token });
+    const refused = await action("private-search", { text: "jacket" });
+    assert.equal(refused.status, 429);
+    assert.equal(refused.body.error, "anchor_allowance_used");
+    assert.equal((await api("/api/state")).body.session_id, undefined);
+    assert.equal((await api("/api/state")).body.private_access.balance, null);
+  });
+
+  test("private Chromium handles navigations, redirects, CSS and images without identity or joins", async () => {
+    cookie = undefined;
+    await api("/api/state");
+    await action("start");
+    const linked = await api("/api/private/browser-link", {});
+    assert.equal(linked.status, 200);
+
+    const connect = () =>
+      agent.fetch(caller + "/api/private/browser-connect", {
+        method: "POST",
+        headers: { Origin: caller, "Content-Type": "application/json" },
+        body: JSON.stringify(linked.body),
+      });
+
+    const connection = await connect();
+    assert.equal(connection.status, 200);
+    assert.equal(connection.headers.get("Set-Cookie").split(";")[0], cookie);
+    assert.equal((await connect()).status, 403);
+    const browser = await chromium.launch();
+
+    const request = (url) =>
+      agent.fetch(caller + "/api/private/resource", {
+        method: "POST",
+        redirect: "manual",
+        headers: { Cookie: cookie, Origin: caller, "Content-Type": "application/json" },
+        body: JSON.stringify({ url }),
+      });
+
+    try {
+      const ordinary = await browser.newContext();
+      await ordinary.addCookies([
+        { name: "account", value: "identified", domain: "store.test", path: "/" },
+      ]);
+      const context = await privateContext(browser, store, request);
+      assert.deepEqual(await context.cookies(), []);
+      const page = await context.newPage();
+      const response = await page.goto(store + "/private/catalog");
+      assert.equal(response.status(), 200);
+      assert.equal(response.headers()["mole-credential"], undefined);
+      assert.match(await page.locator("h1").textContent(), /Northstar jackets/);
+      assert.equal(
+        await page.locator("img").evaluate((image) => image.complete && image.naturalWidth > 0),
+        true,
+      );
+      assert.equal(
+        await page.locator("body").evaluate((body) => getComputedStyle(body).backgroundColor),
+        "rgb(245, 244, 239)",
+      );
+      const before = (await api("/api/state")).body.private_access.balance;
+      assert.equal(before, 21);
+      await page.goto(store + "/private/redirect");
+      assert.equal(page.url(), store + "/private/catalog");
+      assert.equal((await api("/api/state")).body.private_access.balance, 18);
+      const refused = await page.goto(store + "/private/account");
+      assert.equal(refused.status(), 403);
+      const blocked = await context.newPage();
+      await assert.rejects(blocked.goto(store + "/private/external"), /ERR_BLOCKED_BY_CLIENT/);
+      await blocked.close();
+      const publicPage = await page.goto(store + "/products/stormline-shell");
+      assert.equal(publicPage.status(), 200);
+      assert.equal((await api("/api/state")).body.private_access.balance, 18);
+      assert.deepEqual(await context.cookies(), []);
+
+      const observed = (await seen()).filter((entry) =>
+        ["/private/catalog", "/private/catalog.css", "/private/jacket.svg"].includes(entry.path),
+      );
+
+      for (const path of ["/private/catalog", "/private/catalog.css", "/private/jacket.svg"]) {
+        assert.ok(observed.some((entry) => entry.path === path && entry.scheme === "Mole"));
+      }
+
+      for (const entry of observed) {
+        for (const name of [
+          "cookie",
+          "poppy-session",
+          "dpop",
+          "northstar-invite",
+          "northstar-eligibility",
+        ])
+          assert.equal(entry.headers.includes(name), false);
+      }
+
+      await context.close();
+      const reopened = await privateContext(browser, store, request);
+      const next = await reopened.newPage();
+      await next.goto(store + "/private/catalog");
+      assert.equal((await api("/api/state")).body.private_access.balance, 15);
+      await reopened.close();
+      await receiver.fetch(store + "/__test/policy?mode=lose-asset");
+      assert.equal((await request(store + "/private/catalog.css")).status, 500);
+      assert.equal((await api("/api/state")).body.private_access.pending, true);
+      await mf.setOptions(options);
+      agent = await mf.getWorker("caller");
+      receiver = await mf.getWorker("receiver");
+      const recovered = await request(store + "/private/catalog.css");
+      assert.equal(recovered.status, 200);
+      assert.match(await recovered.text(), /background/);
+      assert.equal((await api("/api/state")).body.private_access.balance, 14);
+      await ordinary.close();
+    } finally {
+      await browser.close();
+    }
+  });
+
+  test("hosted configuration, trusted configuration without advertisements, and failure policies", async () => {
+    options.workers[0].config.env.MOLE_PROVIDER_ORIGIN = text("https://provider.test");
+    options.workers[0].config.env.MOLE_PROVIDER = { type: "worker", worker: "receiver" };
+    options.workers[0].config.env.MOLE_MODERATOR_CONFIG_URI = text(
+      store + "/mole/moderator/config",
+    );
+    await mf.setOptions(options);
+    agent = await mf.getWorker("caller");
+    receiver = await mf.getWorker("receiver");
+
+    for (const mode of [
+      "hosted",
+      "unadvertised",
+      "mismatch",
+      "redirect",
+      "wrong-company",
+      "web-disabled",
+    ]) {
+      await receiver.fetch(store + "/__test/policy?mode=" + mode);
+      cookie = undefined;
+      await api("/api/state");
+
+      if (mode === "web-disabled") {
+        const response = await agent.fetch(caller + "/api/private/resource", {
+          method: "POST",
+          headers: { Cookie: cookie, Origin: caller, "Content-Type": "application/json" },
+          body: JSON.stringify({ url: store + "/private/catalog" }),
+        });
+
+        assert.equal(response.status, 403);
+        assert.equal((await response.json()).error, "company_disables_browsing");
+        continue;
+      }
+
+      const response = await action("private-search", { text: "jacket" });
+
+      if (["hosted", "unadvertised"].includes(mode)) {
+        assert.equal(response.status, 200, JSON.stringify(response.body));
+        assert.equal(response.body.private_access.balance, 23);
+      } else {
+        assert.equal(
+          response.status,
+          mode === "wrong-company" ? 400 : 409,
+          JSON.stringify(response.body),
+        );
+        assert.equal((await api("/api/state")).body.session_id, undefined);
+
+        if (mode !== "wrong-company") assert.equal((await action("start")).status, 200);
+      }
+    }
+
+    await receiver.fetch(store + "/__test/policy?mode=normal");
   });
 });

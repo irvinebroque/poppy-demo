@@ -54,6 +54,89 @@ function wallet(source) {
     /^    if \(url\.origin !== address.*$/m,
     "    if (url.username || url.password || url.search || url.hash || (url.protocol !== 'https:' && !(url.protocol === 'http:' && ['127.0.0.1', 'localhost'].includes(url.hostname))))",
   );
+  // The Poppy adapter supplies verified configuration URLs. No demo endpoint
+  // discovery or inferred /config, /issue or /grant URL crosses the transport.
+  source = replace(
+    source,
+    /let endpoints: Endpoints \| undefined;/,
+    "let endpoints: Endpoints | undefined;\nlet issuance = '';\nlet grant = '';",
+  );
+  source = replace(
+    source,
+    /function endpoint\(role: keyof Endpoints, path: string\) \{[\s\S]*?\n\}/,
+    "function endpoint(role: keyof Endpoints, path: string) {\n" +
+      "  if (!endpoints) throw new Error('Endpoints not loaded.');\n" +
+      "  const address = path === '/config' ? endpoints[role] : role === 'moderator' ? issuance : grant;\n" +
+      "  if (!address) throw new Error('Verified endpoint unavailable.');\n  return address;\n}",
+  );
+  source = replace(
+    source,
+    /origin = '', wasm, \.\.\.replaced/,
+    "moderatorConfig = '', anchorConfig = '', wasm, ...replaced",
+  );
+  source = replace(
+    source,
+    /origin\?: string; wasm\?: BufferSource/,
+    "moderatorConfig?: string; anchorConfig?: string; wasm?: BufferSource",
+  );
+  source = replace(
+    source,
+    /  const response = await platform\.fetch\(`\$\{origin\}\/endpoints`[\s\S]*?return \{ endpoints, sitekey: value\.sitekey \};/,
+    "  if (!moderatorConfig || !anchorConfig) throw new Error('Verified configuration URLs required.');\n" +
+      "  endpoints = { moderator: moderatorConfig, sso: anchorConfig, nocheck: anchorConfig, turnstile: anchorConfig };\n" +
+      "  return { endpoints, sitekey: '' };",
+  );
+  source = replace(
+    source,
+    /  hooks\.config\('moderator', value\);/,
+    "  issuance = uri;\n  hooks.config('moderator', value);",
+  );
+  source = replace(
+    source,
+    /  hooks\.config\(which, value\);/,
+    "  if (!object(value) || typeof value['grant-uri'] !== 'string') throw new Error('Missing grant URI.');\n" +
+      "  grant = value['grant-uri'];\n  hooks.config(which, value);",
+  );
+  source = replace(
+    source,
+    /type Target = \{ url: string; body: string \| null \};/,
+    "type Target = { url: string; body: string | null; method?: 'GET' | 'POST' };",
+  );
+  source = replace(
+    source,
+    /return object\(value\) && typeof value\.url/,
+    "return object(value) && (value.method === undefined || value.method === 'GET' || value.method === 'POST') && typeof value.url",
+  );
+  source = replace(
+    source,
+    /target: \{ url: value\.target\.url, body: value\.target\.body \}/,
+    "target: { url: value.target.url, body: value.target.body, method: value.target.method }",
+  );
+  source = replace(
+    source,
+    /body: string \| null, step: Step\) \{/,
+    "body: string | null, step: Step, method = 'POST') {",
+  );
+  source = replace(
+    source,
+    /fetchAs\(name, url, \{ method: 'POST', body \}, step\)/,
+    "fetchAs(name, url, { method, body }, step)",
+  );
+  source = replace(
+    source,
+    /fresh\.body, 'presentation-challenge'\)/,
+    "fresh.body, 'presentation-challenge', fresh.method ?? 'POST')",
+  );
+  source = replace(
+    source,
+    /method: 'POST', body: current\.target\.body/,
+    "method: current.target.method ?? 'POST', body: current.target.body",
+  );
+  source = replace(
+    source,
+    /  catch \{\n    if \(step\) trace/,
+    "  catch (error) {\n    if (error instanceof ProtocolError) throw error;\n    if (step) trace",
+  );
   source = source.replace(/credentials: 'include', /g, "").replace(/^export /gm, "");
   source = replace(
     source,
@@ -63,6 +146,7 @@ function wallet(source) {
 
   return (
     "// Generated locally from pinned internal Guac; see UPSTREAM.md.\n" +
+    "import { ProtocolError } from '../../shared/protocol';\n" +
     source +
     "\nreturn { start, read, save, locked, obtain, present, hooks, CREDITS };\n}\n"
   );

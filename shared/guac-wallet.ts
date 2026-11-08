@@ -15,7 +15,11 @@ export const walletStateSchema = z.discriminatedUnion("kind", [
     kind: z.literal("presentation"),
     bytes,
     authorization: z.string(),
-    target: z.object({ url: z.url(), body: z.string().nullable() }),
+    target: z.object({
+      url: z.url(),
+      body: z.string().nullable(),
+      method: z.enum(["GET", "POST"]).optional(),
+    }),
   }),
 ]);
 

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { GUAC_AVAILABLE } from "../../../vendor/guac/available";
 import {
   clientSchema,
   jwksSchema,
@@ -350,6 +351,18 @@ async function handle(request: Request, env: ReceiverEnv): Promise<Response> {
           },
         ],
         web: {},
+        extensions: GUAC_AVAILABLE
+          ? {
+              mole: [
+                {
+                  version: "1",
+                  moderator_config_uri:
+                    env.MOLE_MODERATOR_CONFIG_URI ||
+                    (env.MOLE_PROVIDER_ORIGIN || origin) + "/mole/moderator/config",
+                },
+              ],
+            }
+          : undefined,
       },
       200,
       { "Cache-Control": "public, max-age=300" },
@@ -565,10 +578,24 @@ async function handle(request: Request, env: ReceiverEnv): Promise<Response> {
 
 export default {
   async fetch(request, env) {
+    let response: Response;
+
     try {
-      return securityHeaders(await handle(request, env));
-    } catch (e) {
-      return securityHeaders(errorResponse(e));
+      response = securityHeaders(await handle(request, env));
+    } catch (error) {
+      response = securityHeaders(errorResponse(error));
     }
+
+    const path = new URL(request.url).pathname;
+
+    if (path.startsWith("/mole/") || path.startsWith("/private/")) {
+      response.headers.set("Access-Control-Allow-Origin", "*");
+      response.headers.set(
+        "Access-Control-Expose-Headers",
+        "WWW-Authenticate, Mole-Credential, X-Guac-Grant",
+      );
+    }
+
+    return response;
   },
 } satisfies ExportedHandler<ReceiverEnv>;

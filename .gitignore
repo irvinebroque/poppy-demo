@@ -13,3 +13,5 @@ workers/caller/public/
 vendor/.guac-source/
 vendor/guac/*
 !vendor/guac/UPSTREAM.md
+
+.private-browser.json

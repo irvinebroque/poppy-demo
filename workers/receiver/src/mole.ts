@@ -1,3 +1,5 @@
+import { anchorAccountsSchema } from "../../../shared/mole";
+import { privatePage, type PublicResource } from "./private-pages";
 import { jwksSchema } from "../../../shared/schemas";
 // HTTP/storage adapters around the pinned Guac implementation. No cryptographic primitives here.
 import { GUAC_AVAILABLE } from "../../../vendor/guac/available";
@@ -13,6 +15,7 @@ import {
   fail,
   json,
   now,
+  hash,
   readText,
   verifyAssertion,
   ProtocolError,
@@ -149,6 +152,7 @@ type Accepted = {
   binding: string;
   result: ReturnType<typeof searchCatalog>;
   accepted: number;
+  resource?: PublicResource;
 };
 
 export class MoleModerator extends DurableObject<ReceiverEnv> {
@@ -169,7 +173,7 @@ export class MoleModerator extends DurableObject<ReceiverEnv> {
 
       return createCrypto(
         secret,
-        this.env.RECEIVER_ORIGIN + "/mole/moderator/issue",
+        (this.env.MOLE_PROVIDER_ORIGIN || this.env.RECEIVER_ORIGIN) + "/mole/moderator/issue",
         "northstar-search-v1",
         { keys: [anchor.public_key], epoch: anchor.epoch },
         null,
@@ -247,14 +251,23 @@ export class MoleModerator extends DurableObject<ReceiverEnv> {
       fail("mole_unavailable", 500);
     const replay = "redemption:" + key(issued.epoch) + ":" + key(issued.replay_id);
 
-    if (this.ctx.storage.kv.get(replay)) return fresh();
-    this.ctx.storage.kv.put(replay, true);
+    const previous = this.ctx.storage.kv.get<{ credential: string; expires: number }>(replay);
+
+    if (previous) return previous.expires > now() ? updated({}, 200, previous.credential) : fresh();
+    // An issuance retry returns the first issued credential, never a second grant.
+    this.ctx.storage.kv.put(replay, { credential: issued.credential, expires: now() + 60 });
 
     return updated({}, 200, issued.credential);
   }
-  async search(authorization: string, url: string, query: string): Promise<Response> {
+  async search(
+    authorization: string,
+    url: string,
+    query: string,
+    resource?: PublicResource,
+    method = "POST",
+  ): Promise<Response> {
     const crypto = await this.native();
-    const binding = "POST " + url;
+    const binding = method + " " + url;
 
     const fresh = () =>
       challenge(
@@ -287,6 +300,15 @@ export class MoleModerator extends DurableObject<ReceiverEnv> {
 
       if (recovered.kind === "failed") return fresh();
 
+      if (existing.resource)
+        return new Response(existing.resource.body, {
+          headers: {
+            "Content-Type": existing.resource.contentType,
+            "Mole-Credential": header(recovered),
+            "Cache-Control": "no-store",
+          },
+        });
+
       return updated(
         { results: existing.result, accepted_searches: existing.accepted, recovered: true },
         409,
@@ -312,11 +334,26 @@ export class MoleModerator extends DurableObject<ReceiverEnv> {
 
     const accepted = this.ctx.storage.transactionSync(() => {
       const count = (this.ctx.storage.kv.get<number>("accepted") ?? 0) + 1;
-      this.ctx.storage.kv.put(id, { record: verified.record, binding, result, accepted: count });
+      this.ctx.storage.kv.put(id, {
+        record: verified.record,
+        binding,
+        result,
+        accepted: count,
+        resource,
+      });
       this.ctx.storage.kv.put("accepted", count);
 
       return count;
     });
+
+    if (resource)
+      return new Response(resource.body, {
+        headers: {
+          "Content-Type": resource.contentType,
+          "Mole-Credential": verified.credential,
+          "Cache-Control": "no-store",
+        },
+      });
 
     return updated(
       { results: result, accepted_searches: accepted, recovered: false },
@@ -369,14 +406,25 @@ export async function moleRequest(
 ): Promise<Response | undefined> {
   const url = new URL(request.url),
     path = url.pathname,
-    origin = env.RECEIVER_ORIGIN;
+    origin = env.MOLE_PROVIDER_ORIGIN || env.RECEIVER_ORIGIN;
 
-  if (!path.startsWith("/mole/") && path !== "/private/search") return;
+  if (!path.startsWith("/mole/") && !path.startsWith("/private/")) return;
 
   if (!GUAC_AVAILABLE) fail("private_search_unavailable", 503);
 
+  if (request.method === "OPTIONS")
+    return new Response(null, {
+      status: 204,
+      headers: {
+        "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+        "Access-Control-Allow-Headers":
+          "Authorization, Content-Type, X-Guac-Grant, Poppy-Extensions, Poppy-Version",
+        "Cache-Control": "no-store",
+      },
+    });
+
   if (
-    ["Cookie", "Session", "DPoP", "Poppy-User-ID", "Poppy-Session", "Poppy-Version"].some((name) =>
+    ["Cookie", "Session", "DPoP", "Poppy-User-ID", "Poppy-Session"].some((name) =>
       request.headers.has(name),
     )
   )
@@ -385,17 +433,6 @@ export async function moleRequest(
 
   if (authorization && !authorization.startsWith("Mole "))
     fail("private_request_contains_identity");
-
-  if (path === "/mole/endpoints" && request.method === "GET")
-    return json({
-      moderator: origin + "/mole/moderator",
-      nocheck: origin + "/mole/anchor",
-      sso: origin + "/mole/anchor",
-      turnstile: origin + "/mole/anchor",
-      sitekey: "0xDemoOnly",
-      policy: "One synthetic endorsement per caller wallet per day; no human check",
-      credits: 24,
-    });
 
   if (path === "/mole/anchor/config" && request.method === "GET") {
     const a = await env.MOLE_ANCHOR.getByName("demo-policy").configuration();
@@ -432,12 +469,30 @@ export async function moleRequest(
       origin + "/mole/anchor/grant",
     );
 
-    if (!claim.sub?.startsWith("anchor_")) fail("invalid_eligibility", 403);
+    const invite = request.headers.get("Northstar-Invite");
+
+    if (!invite || claim.sub !== (await hash(invite))) fail("invalid_anchor_account", 403);
+
+    const accounts = env.MOLE_ANCHOR_ACCOUNTS
+      ? anchorAccountsSchema.parse(JSON.parse(env.MOLE_ANCHOR_ACCOUNTS))
+      : env.LOCAL_DEMO === "true"
+        ? [{ account: "demo-member", token: "northstar-demo-member" }]
+        : [];
+
+    const registered = new Map(
+      await Promise.all(
+        accounts.map(async (account) => [await hash(account.token), account.account] as const),
+      ),
+    );
+
+    const account = registered.get(await hash(invite));
+
+    if (!account) fail("anchor_account_not_eligible", 403);
     const body = await binaryBody(request, 16384);
 
     // Grant messages are binary; preserve every byte rather than round-tripping UTF-8.
     const result = await env.MOLE_ANCHOR.getByName("demo-policy").grant(
-      claim.sub,
+      account,
       request.headers.get("X-Guac-Grant"),
       Array.from(body),
     );
@@ -461,6 +516,35 @@ export async function moleRequest(
       request.headers.get("Authorization") ?? "",
     );
 
+  if (request.method === "GET") {
+    if (path === "/private/public")
+      return json({ message: "Public information; no credential required" });
+
+    if (path === "/private/account") return json({ error: "session_or_account_required" }, 403);
+
+    if (path === "/private/external")
+      return new Response(null, {
+        status: 302,
+        headers: { Location: "https://untrusted.invalid/account", "Cache-Control": "no-store" },
+      });
+
+    if (path === "/private/redirect")
+      return new Response(null, {
+        status: 302,
+        headers: { Location: "/private/catalog", "Cache-Control": "no-store" },
+      });
+    const resource = privatePage(path, env.RECEIVER_ORIGIN);
+
+    if (resource)
+      return env.MOLE_MODERATOR.getByName("demo-policy").search(
+        authorization ?? "",
+        new URL(path, env.RECEIVER_ORIGIN).href,
+        "",
+        resource,
+        "GET",
+      );
+  }
+
   if (path === "/private/search" && request.method === "POST") {
     const query = url.searchParams.get("q") ?? "";
 
@@ -469,7 +553,7 @@ export async function moleRequest(
       query.length > 80 ||
       [...url.searchParams.keys()].some((k) => k !== "q") ||
       url.searchParams.getAll("q").length !== 1 ||
-      request.body
+      (await readText(request, 1024)).length > 0
     )
       fail("invalid_search");
     const target = new URL(path, origin);

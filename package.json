@@ -20,7 +20,8 @@
     "lint": "vp lint --deny-warnings",
     "fmt": "vp fmt",
     "build:guac": "node scripts/build-guac.mjs",
-    "test:mole": "node scripts/prepare-guac.mjs --require && vp test run tests/private-search.test.mjs"
+    "test:mole": "node scripts/prepare-guac.mjs --require && vp test run tests/private-search.test.mjs",
+    "browse:private": "node scripts/browse-private.mjs"
   },
   "dependencies": {
     "@cloudflare/kumo": "^2.14.0",
@@ -44,6 +45,7 @@
     "@vitejs/plugin-react": "^6.1.2",
     "cf": "^1.0.0-beta.28",
     "miniflare": "5.20261104.0-beta",
+    "playwright": "^1.65.0",
     "tailwindcss": "^4.3.3",
     "vite": "npm:@voidzero-dev/vite-plus-core@1.5.0",
     "vite-plus": "1.5.0",

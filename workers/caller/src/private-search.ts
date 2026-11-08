@@ -1,9 +1,11 @@
 import { GUAC_AVAILABLE } from "../../../vendor/guac/available";
 import { walletStateSchema, type WalletState } from "../../../shared/guac-wallet";
 import { createGuacWallet } from "../../../vendor/guac/wallet";
-import { claims, fail, id, readText } from "../../../shared/protocol";
+import { fail, readText } from "../../../shared/protocol";
 
 import { searchResponseSchema, type PrivateSearchView } from "../../../shared/private-search";
+
+import { MoleTransport } from "./mole-transport";
 
 type Wallet = ReturnType<typeof createGuacWallet>;
 
@@ -11,11 +13,14 @@ type Wallet = ReturnType<typeof createGuacWallet>;
 // wallet HTTP and persistence. No proof, credential or eligibility ID enters Pi.
 export class PrivateSearch {
   private wallet = createGuacWallet();
+  private transport: MoleTransport;
   private ready?: ReturnType<Wallet["start"]>;
   constructor(
     private storage: DurableObjectStorage,
     private env: CallerEnv,
-  ) {}
+  ) {
+    this.transport = new MoleTransport(storage, env);
+  }
   view(): PrivateSearchView {
     return {
       ...(this.storage.kv.get<PrivateSearchView>("private-view") ?? {
@@ -33,107 +38,50 @@ export class PrivateSearch {
   private save(view: PrivateSearchView) {
     this.storage.kv.put("private-view", view);
   }
-  private initialize() {
+  authenticate(invite: string) {
+    this.storage.kv.put("anchor-invite", invite);
+  }
+  private async initialize() {
     if (!GUAC_AVAILABLE) fail("private_search_unavailable", 503);
 
-    return (this.ready ??= this.wallet
-      .start({
-        origin: this.env.RECEIVER_ORIGIN,
-        store: {
-          get: async () => this.storage.kv.get<WalletState>("mole-wallet"),
-          put: async (value) => {
-            this.storage.kv.put("mole-wallet", walletStateSchema.parse(value));
-            await this.storage.sync();
+    if (!this.ready) {
+      const configuration = await this.transport.configuration();
+      this.ready = this.wallet
+        .start({
+          ...configuration,
+          store: {
+            get: async () => this.storage.kv.get<WalletState>("mole-wallet"),
+            put: async (value) => {
+              this.storage.kv.put("mole-wallet", walletStateSchema.parse(value));
+              await this.storage.sync();
+            },
+            lock: (operation) => operation(),
           },
-          lock: (operation) => operation(), // CallerSession owns the surrounding queue.
-        },
-        fetch: async (address, init) => {
-          const url = new URL(address);
+          fetch: async (address, init) => {
+            const response = await this.transport.request(address, init);
+            const view = this.view();
+            view.exchanges = [
+              ...view.exchanges,
+              {
+                method: init.method ?? "GET",
+                path: new URL(address).pathname,
+                status: response.status,
+              },
+            ].slice(-24);
+            this.save(view);
 
-          if (url.pathname === "/endpoints") url.pathname = "/mole/endpoints";
+            return response;
+          },
+        })
+        .catch((error) => {
+          this.ready = undefined;
+          throw error;
+        });
+    }
 
-          if (
-            url.origin !== this.env.RECEIVER_ORIGIN ||
-            url.username ||
-            url.password ||
-            url.hash ||
-            ![
-              "/mole/endpoints",
-              "/mole/anchor/config",
-              "/mole/anchor/grant",
-              "/mole/moderator/config",
-              "/mole/moderator/issue",
-              "/private/search",
-            ].includes(url.pathname)
-          )
-            fail("invalid_private_endpoint");
-          // Construct fresh headers: visitor cookies and Poppy identity cannot cross.
-          const headers = new Headers();
-
-          for (const [name, value] of new Headers(init.headers)) {
-            if (!["authorization", "content-type", "x-guac-grant"].includes(name.toLowerCase()))
-              fail("invalid_private_header");
-            headers.set(name, value);
-          }
-
-          if (url.pathname === "/mole/anchor/grant") {
-            let owner = this.storage.kv.get<string>("mole-eligibility");
-
-            if (!owner) {
-              owner = id("anchor_");
-              this.storage.kv.put("mole-eligibility", owner);
-            }
-
-            headers.set(
-              "Northstar-Eligibility",
-              await this.env.IDENTITY.getByName("signing-key").assertion(
-                claims(
-                  this.env.CALLER_ORIGIN + "/agent.json",
-                  owner,
-                  this.env.RECEIVER_ORIGIN + "/mole/anchor/grant",
-                ),
-              ),
-            );
-          }
-
-          const response = await this.env.RECEIVER.fetch(url.href, {
-            method: init.method ?? "GET",
-            body: init.body,
-            headers,
-            redirect: "manual",
-            signal: AbortSignal.timeout(30000),
-          });
-
-          const view = this.view();
-          view.exchanges = [
-            ...view.exchanges,
-            { method: init.method ?? "GET", path: url.pathname, status: response.status },
-          ].slice(-24);
-          this.save(view);
-
-          return response;
-        },
-      })
-      .catch((error) => {
-        this.ready = undefined;
-        throw error;
-      }));
+    return this.ready;
   }
-  private async update() {
-    const state = await this.wallet.read(),
-      view = this.view();
-
-    view.phase = state.kind;
-    view.pending = state.kind === "presentation";
-    view.balance = state.kind === "credential" ? Number(state.balance) : null;
-
-    if ("bytes" in state) state.bytes.fill(0);
-    this.save(view);
-
-    return view;
-  }
-  async search(query: string, loseResponse = false) {
-    if (!query.trim() || query.length > 80) fail("invalid_search");
+  private async obtain() {
     await this.initialize();
     let state = await this.wallet.read();
 
@@ -150,14 +98,101 @@ export class PrivateSearch {
     state.bytes.fill(0);
 
     if (balance < 1) fail("private_allowance_exhausted", 429);
+  }
+  async resource(raw: string) {
+    const target = new URL(raw);
+
+    if (
+      target.origin !== this.env.RECEIVER_ORIGIN ||
+      target.username ||
+      target.password ||
+      target.hash
+    )
+      fail("invalid_private_endpoint");
+
+    if (
+      ["/oauth/", "/poppy/", "/api/orders", "/mole/"].some((prefix) =>
+        target.pathname.startsWith(prefix),
+      )
+    )
+      fail("private_resource_not_supported", 403);
+    await this.transport.checkBrowsing();
+    const pending = this.storage.kv.get<WalletState>("mole-wallet");
+
+    if (pending?.kind === "presentation") {
+      if (pending.target.method !== "GET") fail("recover_search_first", 409);
+      await this.initialize();
+      const recovered = await this.presentResource(null);
+
+      if (pending.target.url === target.href) return recovered;
+      await recovered.body?.cancel();
+    }
+
+    const response = await this.transport.request(target.href);
+
+    if (response.status !== 401 || !response.headers.get("WWW-Authenticate")?.startsWith("Mole "))
+      return response;
+    await response.body?.cancel();
+    await this.obtain();
+
+    return this.presentResource(target.href);
+  }
+  private async presentResource(url: string | null) {
+    try {
+      const presented = await this.wallet.present(url ? { url, body: null, method: "GET" } : null, {
+        lookup: false,
+      });
+
+      if (presented.kind === "lost") fail("private_response_lost", 409);
+      const headers = new Headers(presented.response.headers);
+      headers.delete("Mole-Credential");
+      headers.delete("Set-Cookie");
+
+      return new Response(presented.response.body, {
+        status: presented.response.status === 409 ? 200 : presented.response.status,
+        headers,
+      });
+    } finally {
+      await this.update();
+    }
+  }
+  private async update() {
+    const state = await this.wallet.read(),
+      view = this.view();
+
+    view.phase = state.kind;
+    view.pending = state.kind === "presentation";
+    view.balance = state.kind === "credential" ? Number(state.balance) : null;
+
+    if ("bytes" in state) state.bytes.fill(0);
+    this.save(view);
+
+    return view;
+  }
+  async search(query: string, loseResponse = false) {
+    if (!query.trim() || query.length > 80) fail("invalid_search");
+
+    if (this.view().pending) fail("recover_search_first", 409);
+    const url = new URL("/private/search", this.env.RECEIVER_ORIGIN);
+    url.searchParams.set("q", query);
+    // The first request discloses no identity, even before discovery or a grant.
+    const initial = await this.transport.request(url.href, { method: "POST" });
+
+    if (initial.status !== 401 || !initial.headers.get("WWW-Authenticate")?.startsWith("Mole ")) {
+      if (!initial.ok) fail("private_access_refused", initial.status);
+      await this.complete({ kind: "fresh", response: initial });
+
+      return this.view();
+    }
+
+    await initial.body?.cancel();
+    await this.obtain();
     const view = this.view();
     view.query = query;
     view.results = [];
     view.recovered = false;
     view.shared = false;
     this.save(view);
-    const url = new URL("/private/search", this.env.RECEIVER_ORIGIN);
-    url.searchParams.set("q", query);
 
     try {
       await this.complete(

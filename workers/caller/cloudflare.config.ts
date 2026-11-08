@@ -21,6 +21,12 @@ export default defineConfig({
       CALLER_ORIGIN: bindings.text(process.env.POPPY_CALLER_ORIGIN ?? "http://localhost:8787"),
       RECEIVER_ORIGIN: bindings.text(process.env.POPPY_RECEIVER_ORIGIN ?? "http://localhost:8788"),
       LOCAL_DEMO: bindings.text(process.env.POPPY_LOCAL_DEMO ?? "true"),
+      MOLE_PROVIDER: process.env.POPPY_MOLE_PROVIDER_NAME
+        ? bindings.worker({ worker: process.env.POPPY_MOLE_PROVIDER_NAME })
+        : undefined,
+      MOLE_PROVIDER_ORIGIN: bindings.text(process.env.POPPY_MOLE_PROVIDER_ORIGIN ?? ""),
+      MOLE_MODERATOR_CONFIG_URI: bindings.text(process.env.POPPY_MOLE_MODERATOR_CONFIG_URI ?? ""),
+      MOLE_ANCHOR_CONFIG_URI: bindings.text(process.env.POPPY_MOLE_ANCHOR_CONFIG_URI ?? ""),
       MODEL: bindings.text(process.env.POPPY_MODEL ?? "@cf/moonshotai/kimi-k2.7-code"),
       RECEIVER: bindings.worker({ worker: receiver }),
       IDENTITY: bindings.durableObject({ worker, exportName: "AgentIdentity" }),

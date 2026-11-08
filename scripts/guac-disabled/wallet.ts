@@ -2,7 +2,8 @@
 import type { WalletState } from "../../shared/guac-wallet";
 
 type Platform = {
-  origin: string;
+  moderatorConfig: string;
+  anchorConfig: string;
   store: {
     get(): Promise<WalletState | undefined>;
     put(value: WalletState): Promise<void>;
@@ -27,7 +28,7 @@ export function createGuacWallet() {
       unavailable();
     },
     async present(
-      _request: { url: string; body: string | null } | null,
+      _request: { url: string; body: string | null; method?: "GET" | "POST" } | null,
       _options: { discard?: () => boolean; lookup?: boolean },
     ): Promise<
       { kind: "lost" } | { kind: "fresh" | "duplicate" | "recovered"; response: Response }

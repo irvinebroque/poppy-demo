@@ -1,6 +1,9 @@
+import { browserLinkSchema, privateResourceSchema } from "../../../shared/mole";
 import { actionSchema, promptSchema } from "../../../shared/schemas";
 import {
   cookie,
+  claims,
+  verifyAssertion,
   randomSecret,
   bodyJson,
   json,
@@ -12,6 +15,10 @@ import {
 import { AgentIdentity, CallerSession } from "./session";
 
 export { AgentIdentity, CallerSession };
+
+function visitorCookie(visitor: string, env: CallerEnv) {
+  return `poppy_visitor=${visitor}; HttpOnly; SameSite=Lax; Path=/; Max-Age=2592000${env.LOCAL_DEMO === "true" ? "" : "; Secure"}`;
+}
 
 async function handle(request: Request, env: CallerEnv) {
   const url = new URL(request.url);
@@ -36,6 +43,35 @@ async function handle(request: Request, env: CallerEnv) {
 
   if (url.pathname.startsWith("/assets/") && request.method === "GET")
     return env.ASSETS.fetch(request);
+
+  if (url.pathname === "/api/private/browser-connect" && request.method === "POST") {
+    if (
+      request.headers.get("Origin") !== env.CALLER_ORIGIN ||
+      request.headers.get("Content-Type") !== "application/json"
+    )
+      fail("invalid_request");
+    const input = await bodyJson(request, browserLinkSchema);
+    const identity = env.IDENTITY.getByName("signing-key");
+
+    const link = await verifyAssertion(
+      input.browser_token,
+      (await identity.jwks()).keys,
+      env.CALLER_ORIGIN + "/agent.json",
+      env.CALLER_ORIGIN + "/api/private/browser-connect",
+    );
+
+    if (
+      !link.sub ||
+      !/^[A-Za-z0-9_-]{43}$/.test(link.sub) ||
+      !link.jti ||
+      !link.exp ||
+      !(await identity.consumeBrowserLink(link.jti, link.exp))
+    )
+      fail("invalid_browser_link", 403);
+
+    return json({ connected: true }, 200, { "Set-Cookie": visitorCookie(link.sub, env) });
+  }
+
   let visitor = cookie(request, "poppy_visitor");
   let fresh = false;
 
@@ -74,7 +110,14 @@ async function handle(request: Request, env: CallerEnv) {
   else if (url.pathname === "/api/agent/results" && request.method === "GET")
     response = json({ jobs: await agent.results() });
   else if (
-    ["/api/action", "/api/agent/prompt", "/api/pi/abort", "/api/pi/new"].includes(url.pathname) &&
+    [
+      "/api/action",
+      "/api/private/resource",
+      "/api/private/browser-link",
+      "/api/agent/prompt",
+      "/api/pi/abort",
+      "/api/pi/new",
+    ].includes(url.pathname) &&
     request.method === "POST"
   ) {
     if (
@@ -84,7 +127,20 @@ async function handle(request: Request, env: CallerEnv) {
     )
       fail("invalid_request");
 
-    if (url.pathname === "/api/agent/prompt") {
+    if (url.pathname === "/api/private/browser-link") {
+      response = json({
+        browser_token: await env.IDENTITY.getByName("signing-key").assertion(
+          claims(
+            env.CALLER_ORIGIN + "/agent.json",
+            visitor,
+            env.CALLER_ORIGIN + "/api/private/browser-connect",
+          ),
+        ),
+      });
+    } else if (url.pathname === "/api/private/resource") {
+      const input = await bodyJson(request, privateResourceSchema);
+      response = await agent.privateResource(input.url);
+    } else if (url.pathname === "/api/agent/prompt") {
       const b = await bodyJson(request, promptSchema);
       const r = await agent.submit(b.prompt, b.operation_id, b.when_busy ?? "followUp");
       response = json(r, 202);
@@ -96,11 +152,7 @@ async function handle(request: Request, env: CallerEnv) {
     }
   } else fail("not_found", 404);
 
-  if (fresh)
-    response.headers.set(
-      "Set-Cookie",
-      `poppy_visitor=${visitor}; HttpOnly; SameSite=Lax; Path=/; Max-Age=2592000${env.LOCAL_DEMO === "true" ? "" : "; Secure"}`,
-    );
+  if (fresh) response.headers.set("Set-Cookie", visitorCookie(visitor, env));
 
   return response;
 }

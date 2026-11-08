@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Button } from "@cloudflare/kumo";
 import { privateSearchStateSchema, type PrivateSearchView } from "../../../shared/private-search";
 
+import { browserLinkSchema } from "../../../shared/mole";
 import { errorSchema, type ActionInput } from "../../../shared/schemas";
 
 type PrivateCommand = ActionInput & { action: string };
@@ -10,7 +11,9 @@ type Selection = { search: string; ids: string[] };
 
 export function PrivateSearchPanel() {
   const [view, setView] = useState<PrivateSearchView>();
+  const [browserCopied, setBrowserCopied] = useState(false);
   const [continuity, setContinuity] = useState(false);
+  const [invite, setInvite] = useState("");
   const [query, setQuery] = useState("warmer jacket");
   const [lose, setLose] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -71,6 +74,8 @@ export function PrivateSearchPanel() {
         command.lose_response = lose;
       }
 
+      if (name === "anchor-access") command.invite = invite;
+
       if (name === "remember-shortlist") command.product_ids = selected;
 
       const r = await fetch("/api/action", {
@@ -90,10 +95,33 @@ export function PrivateSearchPanel() {
 
       if (s.session_id) setContinuity(true);
       setLose(false);
+
+      if (name === "anchor-access") setInvite("");
     } catch (e) {
       if (mounted.current) setError(e instanceof Error ? e.message : "Request failed");
     } finally {
       if (mounted.current) setBusy(false);
+    }
+  };
+
+  const copyBrowser = async () => {
+    try {
+      const response = await fetch("/api/private/browser-link", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: "{}",
+      });
+
+      if (!response.ok) throw new Error("Could not link the private browser");
+      const link = browserLinkSchema.parse(await response.json());
+      await navigator.clipboard.writeText(
+        `POPPY_BROWSER_TOKEN=${link.browser_token} vp run browse:private`,
+      );
+
+      if (mounted.current) setBrowserCopied(true);
+    } catch (error) {
+      if (mounted.current)
+        setError(error instanceof Error ? error.message : "Browser setup failed");
     }
   };
 
@@ -109,13 +137,13 @@ export function PrivateSearchPanel() {
           <p className="text-xs font-semibold uppercase tracking-wide text-kumo-subtle">
             Northstar · MOLE + Poppy
           </p>
-          <h2 className="mt-1 text-lg font-semibold">Browse privately. Remember by choice.</h2>
+          <h2 className="mt-1 text-lg font-semibold">Choose how your agent accesses Northstar.</h2>
         </div>
         <span className="rounded-full bg-kumo-elevated px-3 py-1 text-xs">
           {view?.pending
             ? "Update pending"
             : view?.balance == null
-              ? "24 credits on first search"
+              ? "24 credits per eligible Anchor account"
               : `${view.balance} credits in your wallet`}
         </span>
       </div>
@@ -123,6 +151,52 @@ export function PrivateSearchPanel() {
         Search costs 1 credit. Northstar receives the query and a MOLE proof; the search request
         carries no Poppy user, session or account credential.
       </p>
+      <div className="flex flex-wrap gap-2">
+        <Button disabled={busy} onClick={() => void action("discover")}>
+          Discover Northstar
+        </Button>
+        <Button disabled={busy} onClick={() => void action("start")}>
+          Use Poppy Session
+        </Button>
+        <Button disabled={busy} onClick={() => void action("anonymous-session")}>
+          Use new anonymous ID
+        </Button>
+      </div>
+      <p className="text-xs text-kumo-subtle">
+        Your agent can choose these modes directly. A Poppy Session shares a pseudonymous
+        identifier; account access still uses OAuth.
+      </p>
+      <div className="space-y-2">
+        <Button disabled={busy} onClick={() => void copyBrowser()}>
+          Copy private browser command
+        </Button>
+        <p className="text-xs text-kumo-subtle">
+          {browserCopied
+            ? "Command copied. Run it in the demo checkout within 60 seconds to use this wallet in an isolated browser."
+            : "Use this wallet in the optional local browser integration."}
+        </p>
+      </div>
+      <details className="text-sm">
+        <summary>Anchor account access</summary>
+        <p className="text-xs text-kumo-subtle">
+          Enter a provisioned Anchor invitation to obtain MOLE credits. Local development uses
+          northstar-demo-member.
+        </p>
+        <label className="block">
+          Invitation
+          <input
+            aria-label="Anchor invitation"
+            type="password"
+            value={invite}
+            onChange={(event) => setInvite(event.target.value)}
+            className="m-2 rounded border p-2"
+            autoComplete="off"
+          />
+        </label>
+        <Button disabled={busy || !invite} onClick={() => void action("anchor-access")}>
+          Use Anchor account
+        </Button>
+      </details>
       <form
         onSubmit={(e) => {
           e.preventDefault();
@@ -219,8 +293,8 @@ export function PrivateSearchPanel() {
         {continuity
           ? "Poppy continuity is active. Account access still requires separate sign-in approval."
           : "No Poppy session has been created."}{" "}
-        Synthetic allowance: one grant per caller wallet per day. Single-operator prototype; network
-        metadata can still correlate requests.
+        One grant per provisioned Anchor account per day. Clearing cookies does not reset the grant
+        limit. Single-operator prototype; network metadata can still correlate requests.
       </p>
       {error ? (
         <p role="alert" className="text-sm text-kumo-danger">
