@@ -83,6 +83,7 @@ export default {
     }
 
     observed.push({
+      origin: url.origin,
       path: url.pathname,
       headers: [...request.headers.keys()],
       scheme: request.headers.get("Authorization")?.split(" ")[0],

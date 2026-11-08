@@ -602,6 +602,15 @@ describe("real Guac MOLE integration", { skip: !(await guacAvailable()) }, () =>
       "wrong-company",
       "web-disabled",
     ]) {
+      options.workers[1].config.env.MOLE_PROVIDER_ORIGIN = text(
+        mode === "hosted" ? "https://provider.test" : "",
+      );
+      options.workers[0].config.env.MOLE_ANCHOR_CONFIG_URI = text(
+        (mode === "hosted" ? "https://provider.test" : store) + "/mole/anchor/config",
+      );
+      await mf.setOptions(options);
+      agent = await mf.getWorker("caller");
+      receiver = await mf.getWorker("receiver");
       await receiver.fetch(store + "/__test/policy?mode=" + mode);
       cookie = undefined;
       await api("/api/state");
@@ -623,6 +632,17 @@ describe("real Guac MOLE integration", { skip: !(await guacAvailable()) }, () =>
       if (["hosted", "unadvertised"].includes(mode)) {
         assert.equal(response.status, 200, JSON.stringify(response.body));
         assert.equal(response.body.private_access.balance, 23);
+
+        if (mode === "hosted") {
+          const requests = await seen();
+
+          for (const path of ["/mole/anchor/grant", "/mole/moderator/issue"])
+            assert.ok(
+              requests.some(
+                (entry) => entry.path === path && entry.origin === "https://provider.test",
+              ),
+            );
+        }
       } else {
         assert.equal(
           response.status,

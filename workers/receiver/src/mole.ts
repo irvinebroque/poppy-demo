@@ -556,7 +556,7 @@ export async function moleRequest(
       (await readText(request, 1024)).length > 0
     )
       fail("invalid_search");
-    const target = new URL(path, origin);
+    const target = new URL(path, env.RECEIVER_ORIGIN);
     target.searchParams.set("q", query);
 
     if (url.search !== target.search) fail("noncanonical_search");
