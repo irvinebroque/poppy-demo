@@ -1,6 +1,6 @@
 # Poppy on Cloudflare Workers
 
-A two-Worker demo of the [Personal Agent Protocol draft 0.1](https://personalagentprotocol.org/docs/spec). The personal agent uses Cloudflare's [PiHarness integration](https://developers.cloudflare.com/changelog/post/2026-10-02-pi-harness/) with Pi Durable, Agents SDK, and Workers AI. Northstar Outfitters is the fictional receiving website.
+A two-Worker demo of the [Personal Agent Protocol draft 0.4](https://personalagentprotocol.org/docs/0.4/spec). The personal agent uses Cloudflare's [PiHarness integration](https://developers.cloudflare.com/changelog/post/2026-10-02-pi-harness/) with Pi Durable, Agents SDK, and Workers AI. Northstar Outfitters is the fictional receiving website.
 
 - **Caller:** https://poppy-caller.roundtrip.workers.dev
 - **Receiving website:** https://poppy-receiver.roundtrip.workers.dev
@@ -31,21 +31,23 @@ Browser ── visitor cookie ── Caller Worker / CallerSession (Agent + PiHa
            ReplayGuard + CompanyUser (SQLite Durable Objects)
 ```
 
-The caller supplies a hosted Client ID Metadata Document and JWKS. The receiver trusts only this configured peer. Each caller visitor has a random, company-specific opaque user ID, a separate DPoP key, and durable private token storage. Tokens and signing keys do not enter the model transcript or browser state. The Workers communicate through service bindings while signing and validating their public HTTPS request URLs.
+The caller supplies a hosted Client ID Metadata Document and JWKS. The receiver trusts only this configured peer. Each caller visitor has a random, company-specific opaque user ID, a separate DPoP key, and durable private token storage. OAuth tokens, Session JWTs, delegations, and signing keys do not enter the model transcript or browser state. The Workers communicate through service bindings while signing and validating their public HTTPS request URLs.
 
 ## Protocol coverage
 
-- Reciprocal company/issuer discovery, client metadata, ES256 `private_key_jwt` client authentication.
-- Signed-out JWT grants with independent client and session assertions, exact audience checks, short expiry, durable JWT replay protection.
-- DPoP-bound Session Tokens: method/URL/token-hash checks, key binding, proof replay protection. The caller also handles nonce challenges.
-- Direct OAuth authorization-code approval with S256 PKCE, state and issuer validation, exact registered redirects, single-use consent and codes, selected scopes.
-- Account Token refresh, session renewal, signed-in new sessions, scope narrowing, and immediate grant revocation across associated sessions.
-- Poppy conversations: message-ID retry behavior, opaque cursors, inline events, context, ownership, account pinning, direct child conversations, handoff states, and close behavior.
+- Poppy 0.4 discovery, described `orders:read` / `orders:write` scopes, and reciprocal OAuth protected resource / issuer metadata (RFC 9728).
+- Signed-out requests use only a per-request `Poppy-Session` JWT and `Poppy-Version: 0.4`; there is no signed-out token grant. The caller preserves a stable opaque User ID and chooses each Session ID locally.
+- Session JWTs use per-User delegated ES256 keys, with an operator-signed `poppy-delegation+jwt`, a checked thumbprint, request method/URL, audience, token hash, freshness, and durable replay protection. Delegated keys rotate independently of Sessions.
+- Direct OAuth authorization-code approval with S256 PKCE, state and issuer validation, exact registered redirects, single-use consent and codes, and selected scopes. Client assertions target the issuer, not the token endpoint.
+- Ordinary OAuth access and refresh tokens, independent of Sessions, with DPoP binding, scope narrowing, service-specific conversation tokens, and immediate revocation of associated access tokens. The caller handles DPoP nonce challenges.
+- Conversations use request IDs on every POST, `author.type` on messages, `working` / `handoff` / `responder` / `closed` state, opaque cursors and pagination, account pinning, direct child conversations, handoff/cancel, and HTTP 202 close responses.
 - An OpenAPI order/exchange API with per-request scope enforcement and a repeatable simulated exchange.
 
-The receiver's company replies are deterministic fixtures. It has no staffed human support desk; handoff truthfully returns to its agent. It uses JSON event responses rather than an SSE stream. Optional mediated auth, device authorization, MCP, A2A, and browser-session exchange are not advertised or implemented. This is a focused interoperability demo, not a complete protocol conformance suite.
+Draft 0.4 is the current **in-progress draft**, not a frozen release. This implementation was checked against [upstream commit `a2ca25a`](https://github.com/personal-agent-protocol/personal-agent-protocol/tree/a2ca25ab43eccc045bc7f2b86d3b579088da9af1/content/versions/0.4) on November 8, 2026. It serves only 0.4, selects a same-origin 0.4 document if a peer advertises it in `supported_versions`, and rejects incompatible versions. Existing 0.1 token grants and conversation state cannot be reused: visitors keep their pairwise User ID but must approve account access again after upgrading.
 
-`workers-oauth-provider` was considered, but its current API does not supply the draft's required DPoP/session assertion behavior. This demo implements that protocol layer directly using `jose` and Durable Objects.
+The receiver's company replies are deterministic fixtures. It has no staffed human support desk; handoff truthfully returns to its agent. It uses JSON event responses rather than an SSE stream. Optional extensions (including Operations and Mediated Sign-In), device authorization, MCP, and browser-session join are not advertised or implemented. This is a focused interoperability demo, not a complete protocol conformance suite.
+
+This demo implements its OAuth, Session, and conversation layers directly using `jose` and Durable Objects.
 
 ## Develop with the cf CLI
 
@@ -57,7 +59,7 @@ npx cf auth login
 npm run dev
 ```
 
-Caller: http://localhost:8787 · Receiver: http://localhost:8788. Local development uses the real remote Workers AI binding; inference can incur usage. For protocol-only testing, run `npm test`; it uses isolated local workerd instances and needs no Cloudflare login. The cf beta remote AI preview currently returns an opaque connection error in this environment; the deployed caller has been verified with real Pi turns. Local HTTP is explicitly restricted to localhost/127.0.0.1 and is disabled on deployment.
+Caller: http://localhost:8787 · Receiver: http://localhost:8788. Local development uses the real remote Workers AI binding; inference can incur usage. For protocol-only testing, run `npm test`; it uses isolated local workerd instances and needs no Cloudflare login. Local HTTP is explicitly restricted to localhost/127.0.0.1 and is disabled on deployment.
 
 ```sh
 npm run types
@@ -67,7 +69,7 @@ npm run build
 npm run smoke:live # verify the deployed synthetic account flow
 ```
 
-`npm run build` performs `cf deploy --dry-run` for both Workers. Configuration lives in each Worker's `cloudflare.config.ts`; `wrangler.config.ts` supplies local development ports and the caller’s Vite asset build. The small helper handles cf beta's workspace dev-server discovery and keeps its local registry in this project. Binding types are inferred from the canonical configs, with typed Durable Object RPC namespaces.
+`npm run build` first creates the UI assets, then performs `cf deploy --dry-run` for both Workers. `npm run deploy` also creates the assets before uploading. Configuration lives in each Worker's `cloudflare.config.ts`; `wrangler.config.ts` supplies local development ports and the caller’s Vite asset build. The small helper handles cf beta's workspace dev-server discovery and keeps its local registry in this project. Binding types are inferred from the canonical configs, with typed Durable Object RPC namespaces.
 
 ## Deploy
 
@@ -87,4 +89,6 @@ The demo's consent page represents a synthetic account, not a real customer logi
 - `workers/receiver/src/index.ts`: discovery, OAuth, DPoP and protocol HTTP endpoints.
 - `workers/receiver/src/state.ts`: replay and code stores, account grants, conversations.
 - `shared/protocol.ts`: JWT, DPoP, validation and bounded body helpers.
-- `tests/protocol.test.mjs`: integration tests running the receiver in workerd.
+- `tests/protocol.test.mjs`: receiver protocol and security regression tests in workerd.
+- `tests/caller-flow.test.mjs`: both real Workers, Durable Objects, and service bindings through the complete synthetic account flow.
+- `tests/smoke.mjs`: shared assertions used locally and by `npm run smoke:live`; override `POPPY_CALLER_ORIGIN` / `POPPY_RECEIVER_ORIGIN` to test an isolated deployment.
